@@ -29,7 +29,8 @@ DISK_GB="${DISK_GB:-10}"
 BRIDGE="${BRIDGE:-vmbr0}"
 STORAGE="${STORAGE:-local-lvm}"
 TEMPLATE_STORAGE="${TEMPLATE_STORAGE:-local}"
-TEMPLATE="${TEMPLATE:-debian-12-standard_12.7-1_amd64.tar.zst}"
+TEMPLATE="${TEMPLATE:-}"               # empty = auto-pick newest debian-12-standard
+TEMPLATE_PREFIX="${TEMPLATE_PREFIX:-debian-12-standard}"
 IPCONFIG="${IPCONFIG:-dhcp}"
 GATEWAY="${GATEWAY:-}"
 NODE_MAJOR="${NODE_MAJOR:-20}"
@@ -44,9 +45,24 @@ log() { echo -e "\033[1;36m==>\033[0m $*"; }
 
 # ---- Create the container if missing ----
 if ! pct status "$CTID" >/dev/null 2>&1; then
+  # Resolve the template: an explicit TEMPLATE wins; otherwise prefer one already
+  # downloaded (no network), else pick the newest available matching the prefix. This
+  # avoids breaking every time Debian publishes a new point release.
+  if [ -z "$TEMPLATE" ]; then
+    TEMPLATE=$(pveam list "$TEMPLATE_STORAGE" 2>/dev/null | awk '{print $1}' | sed 's#.*/##' \
+      | grep "^${TEMPLATE_PREFIX}" | sort -V | tail -n1)
+    if [ -z "$TEMPLATE" ]; then
+      log "No ${TEMPLATE_PREFIX} template downloaded yet; refreshing the catalog"
+      pveam update || true
+      TEMPLATE=$(pveam available --section system 2>/dev/null | awk '{print $2}' \
+        | grep "^${TEMPLATE_PREFIX}" | sort -V | tail -n1)
+    fi
+  fi
+  [ -n "$TEMPLATE" ] || { echo "ERROR: could not resolve a ${TEMPLATE_PREFIX} template." >&2; exit 1; }
+  log "Using template $TEMPLATE"
   TEMPLATE_REF="${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}"
   if ! pveam list "$TEMPLATE_STORAGE" 2>/dev/null | grep -q "$TEMPLATE"; then
-    log "Downloading template $TEMPLATE"; pveam update || true; pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
+    log "Downloading template $TEMPLATE"; pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
   fi
   if [ "$IPCONFIG" = "dhcp" ]; then NET="name=eth0,bridge=${BRIDGE},ip=dhcp"
   else NET="name=eth0,bridge=${BRIDGE},ip=${IPCONFIG}${GATEWAY:+,gw=$GATEWAY}"; fi
