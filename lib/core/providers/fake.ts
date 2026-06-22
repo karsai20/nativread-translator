@@ -9,12 +9,16 @@ import type {
   TranslateChunkInput,
   TranslateChunkOutput,
   RefineChunkInput,
+  ResolveGlossaryInput,
 } from "../translator";
+import type { GlossaryMap } from "../glossary";
 import { PLACEHOLDER_OPEN, PLACEHOLDER_CLOSE, BLOCK_MARKER_OPEN, BLOCK_MARKER_CLOSE } from "../markup";
 import { estimateTokens } from "../cost";
 
 export const FAKE_PREFIX = "hu ";
 export const FAKE_REFINE_TAG = "+";
+/** Deterministic canonical rendering the fake assigns to each recurring term. */
+export const fakeRendering = (term: string): string => `HU_${term.replace(/\s+/g, "_")}`;
 
 // A "word" that contains any marker/token PUA char is preserved untouched.
 const PRESERVE_RE = new RegExp(`[${PLACEHOLDER_OPEN}${PLACEHOLDER_CLOSE}${BLOCK_MARKER_OPEN}${BLOCK_MARKER_CLOSE}]`);
@@ -53,5 +57,12 @@ export class FakeTranslator implements Translator {
       text: out,
       usage: { inputTokens: estimateTokens(input.draft), outputTokens: estimateTokens(out) },
     };
+  }
+
+  async resolveGlossary(input: ResolveGlossaryInput): Promise<GlossaryMap> {
+    // Deterministic canonical rendering per term so glossary-learning is observable.
+    const out: GlossaryMap = {};
+    for (const term of input.terms) out[term] = fakeRendering(term);
+    return out;
   }
 }

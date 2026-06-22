@@ -35,6 +35,35 @@ export function seedFromText(xhtml: string, into: GlossaryMap = {}): GlossaryMap
   return result;
 }
 
+/** Seeded terms that still have no fixed target rendering (capped for one resolve call). */
+export function unresolvedTerms(glossary: GlossaryMap, limit = 80): string[] {
+  return Object.entries(glossary)
+    .filter(([, target]) => !target)
+    .map(([term]) => term)
+    .slice(0, limit);
+}
+
+/**
+ * Parse a model's "term -> rendering" resolution response into a map. Keys are
+ * restricted to `knownTerms` (case-insensitive) so a hallucinated term can't enter the
+ * glossary, and a rendering that just echoes the term is kept (pins a name as unchanged).
+ */
+export function parseGlossaryResolution(text: string, knownTerms: string[]): GlossaryMap {
+  const byLower = new Map(knownTerms.map((t) => [t.toLowerCase(), t]));
+  const out: GlossaryMap = {};
+  const lineRe = /^[\s\-*•\d.)]*["“'`]?(.+?)["”'`]?\s*(?:->|=>|→|:|—|–)\s*["“'`]?(.+?)["”'`]?\s*$/;
+  for (const raw of text.split(/\r?\n/)) {
+    const m = raw.match(lineRe);
+    if (!m) continue;
+    const term = m[1]!.trim();
+    const rendering = m[2]!.trim();
+    const canonical = byLower.get(term.toLowerCase());
+    if (!canonical || !rendering) continue;
+    out[canonical] = rendering;
+  }
+  return out;
+}
+
 /** Merge two glossaries; non-empty target translations win over empty ones. */
 export function merge(base: GlossaryMap, incoming: GlossaryMap): GlossaryMap {
   const result: GlossaryMap = { ...base };

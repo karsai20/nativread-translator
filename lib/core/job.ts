@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 import { parseEpub, writeEpub, type Epub } from "./epub";
 import { chunkSpineItem, type Chunk } from "./chunker";
-import { translateBlocks, type Translator } from "./translator";
+import { translateBlocks, resolveGlossary, type Translator } from "./translator";
 import { seedFromText, type GlossaryMap } from "./glossary";
 import { stripInlineTags } from "./markup";
 import {
@@ -70,6 +70,33 @@ function chunkFilePath(jobDir: string, key: string): string {
 function manifestPath(jobDir: string): string {
   return join(jobDir, "manifest.json");
 }
+function glossaryPath(jobDir: string): string {
+  return join(jobDir, "glossary.json");
+}
+
+/**
+ * Resolve canonical renderings for recurring names/terms ONCE, persist them, and reuse
+ * the saved map on resume. This is what keeps a frequently-appearing name identical
+ * across the whole book instead of re-derived (and drifting) per chunk.
+ */
+async function loadOrResolveGlossary(
+  jobDir: string,
+  provider: Translator,
+  seeded: GlossaryMap,
+): Promise<GlossaryMap> {
+  const p = glossaryPath(jobDir);
+  if (existsSync(p)) return JSON.parse(readFileSync(p, "utf8")) as GlossaryMap;
+  try {
+    const resolved = await resolveGlossary(provider, seeded);
+    writeFileSync(p, JSON.stringify(resolved, null, 2));
+    return resolved;
+  } catch {
+    // Glossary resolution is a best-effort quality enhancement, not a hard requirement.
+    // If the provider is unreachable, translate with the seeded glossary rather than
+    // aborting the whole book; do NOT persist, so a later run retries the resolution.
+    return seeded;
+  }
+}
 function writeManifest(jobDir: string, state: JobState): void {
   writeFileSync(manifestPath(jobDir), JSON.stringify(state, null, 2));
 }
@@ -116,6 +143,8 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
 
   let glossary: GlossaryMap = {};
   for (const item of epub.spine) glossary = seedFromText(item.content, glossary);
+  // Fix one canonical rendering per recurring term up front (persisted; reused on resume).
+  glossary = await loadOrResolveGlossary(jobDir, provider, glossary);
 
   const parsedByHref = new Map<
     string,

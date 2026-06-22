@@ -15,7 +15,7 @@
 //   5. Robust fallback: if the model drops a block marker, re-translate that chunk's
 //      blocks individually so output is never lost.
 
-import type { GlossaryMap } from "./glossary";
+import { merge, unresolvedTerms, type GlossaryMap } from "./glossary";
 import {
   protect,
   restore,
@@ -61,11 +61,42 @@ export interface TranslateChunkOutput {
   usage?: TokenUsage;
 }
 
+export interface ResolveGlossaryInput {
+  /** Recurring source terms that need one fixed canonical target rendering. */
+  terms: string[];
+  targetLang: string;
+}
+
 export interface Translator {
   readonly name: string;
   translateChunk(input: TranslateChunkInput): Promise<TranslateChunkOutput>;
   /** Optional second-pass polish. If absent, refinement is skipped. */
   refineChunk?(input: RefineChunkInput): Promise<TranslateChunkOutput>;
+  /**
+   * Optional up-front pass: decide ONE canonical target rendering per recurring term so
+   * names/objects stay identical across the whole book (not re-derived per chunk).
+   * Returns a partial source-term -> target map. If absent, the seeded glossary is used
+   * as-is (model keeps consistency only via context).
+   */
+  resolveGlossary?(input: ResolveGlossaryInput): Promise<GlossaryMap>;
+}
+
+/**
+ * Resolve the still-empty glossary terms into fixed canonical renderings once, up front,
+ * and merge them in. This is what makes a frequently-appearing name or object render the
+ * same every time it appears. No-op when the provider can't resolve or nothing is unresolved.
+ */
+export async function resolveGlossary(
+  provider: Translator,
+  glossary: GlossaryMap,
+  targetLang: string = TARGET_LANG,
+  limit = 80,
+): Promise<GlossaryMap> {
+  if (!provider.resolveGlossary) return glossary;
+  const terms = unresolvedTerms(glossary, limit);
+  if (terms.length === 0) return glossary;
+  const resolved = await provider.resolveGlossary({ terms, targetLang });
+  return merge(glossary, resolved);
 }
 
 export interface BlockInput {
