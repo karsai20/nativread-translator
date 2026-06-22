@@ -2,22 +2,34 @@
   "name": "quire-translator",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
-  "description": "Localhost-only web book translator (EN -> HU). Validation tool + reusable translation core for Quire.",
+  "description": "Modern web book translator (EN->HU). Validation gate + reusable core for Quire.",
   "scripts": {
-    "start": "bun run src/server/index.ts",
-    "dev": "bun --watch src/server/index.ts",
-    "build:web": "bun run src/web/build.ts",
-    "test": "bun test"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "dompurify": "^3.2.0",
     "fast-xml-parser": "^4.5.0",
     "fflate": "^0.8.2",
-    "node-html-parser": "^6.1.13"
+    "lucide-react": "^0.460.0",
+    "next": "^15.1.0",
+    "node-html-parser": "^6.1.13",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
     "@types/bun": "^1.2.0",
     "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tailwindcss": "^4.0.0",
     "typescript": "^5.6.0"
   }
 }

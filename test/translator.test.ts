@@ -1,0 +1,73 @@
+import { test, expect } from "bun:test";
+import { translateBlocks } from "../lib/core/translator.ts";
+import type { Translator, TranslateChunkInput } from "../lib/core/translator.ts";
+import { FakeTranslator, FAKE_REFINE_TAG } from "../lib/core/providers/fake.ts";
+import { splitBlockSegments, BLOCK_MARKER_OPEN, BLOCK_MARKER_CLOSE } from "../lib/core/markup.ts";
+
+const STRIP_MARKERS = new RegExp(`[${BLOCK_MARKER_OPEN}${BLOCK_MARKER_CLOSE}]`, "g");
+
+const blocks = [
+  { index: 0, innerHtml: "Mr. Holloway walked into the <em>old</em> library." },
+  { index: 1, innerHtml: 'He found a <a href="x.xhtml">letter</a>.' },
+  { index: 2, innerHtml: "" }, // empty/image-only block — must be preserved untouched
+];
+
+test("translates all blocks in ONE provider call with full context", async () => {
+  let calls = 0;
+  let sawMultipleBlocks = false;
+  const spy: Translator = {
+    name: "spy",
+    async translateChunk(input: TranslateChunkInput) {
+      calls += 1;
+      // The payload must contain BOTH translatable blocks (context-aware), not one.
+      sawMultipleBlocks = splitBlockSegments(input.text).length === 2;
+      return new FakeTranslator().translateChunk(input);
+    },
+  };
+
+  const res = await translateBlocks(spy, blocks, { glossary: {} });
+
+  expect(calls).toBe(1);
+  expect(sawMultipleBlocks).toBe(true);
+  expect(res.blocks).toHaveLength(3);
+  expect(res.blocks[2]!.html).toBe(""); // empty block preserved
+  expect(res.blocks[0]!.html).toContain("<em>"); // inline markup restored
+  expect(res.blocks[1]!.html).toContain('href="x.xhtml"');
+  expect(res.plainText.length).toBeGreaterThan(0);
+});
+
+test("refine pass runs when enabled and provider supports it", async () => {
+  const res = await translateBlocks(new FakeTranslator(), blocks, { glossary: {}, refine: true });
+  // The fake refine tags the output so we can see the second pass ran.
+  expect(res.blocks[0]!.html).toContain(FAKE_REFINE_TAG);
+});
+
+test("falls back to per-block translation when a block marker goes missing", async () => {
+  let calls = 0;
+  // A broken provider that strips all markers on the first (multi-block) call, forcing
+  // the fallback path; subsequent single-block calls succeed.
+  const broken: Translator = {
+    name: "broken",
+    async translateChunk(input: TranslateChunkInput) {
+      calls += 1;
+      const out = await new FakeTranslator().translateChunk(input);
+      if (calls === 1) return { ...out, text: out.text.replace(STRIP_MARKERS, "") };
+      return out;
+    },
+  };
+
+  const res = await translateBlocks(broken, blocks, { glossary: {} });
+  // 1 failed multi-block call + 2 per-block fallback calls (the empty block is skipped).
+  expect(calls).toBe(3);
+  expect(res.blocks[0]!.html).toContain("<em>");
+  expect(res.blocks[1]!.html).toContain('href="x.xhtml"');
+});
+
+test("glossary target renderings are applied", async () => {
+  const res = await translateBlocks(new FakeTranslator(), [{ index: 0, innerHtml: "Mr. Holloway" }], {
+    glossary: { "Mr. Holloway": "Holloway úr" },
+  });
+  // The fake uppercases everything; assert case-insensitively that the glossary
+  // target rendering (not the source term) came through.
+  expect(res.blocks[0]!.html.toLowerCase()).toContain("holloway úr");
+});

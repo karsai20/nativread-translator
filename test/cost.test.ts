@@ -4,7 +4,7 @@ import {
   addUsage,
   wouldExceedCeiling,
   estimateTokensFromChars,
-} from "../src/core/cost.ts";
+} from "../lib/core/cost.ts";
 
 test("accumulates usage and computes USD", () => {
   let state = createCostState(10);

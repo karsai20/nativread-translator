@@ -1,23 +1,25 @@
-# Run quire-translator as its own container. The uncommon host port is configurable
-# via PORT (default 48217); job state persists on a named volume so a restart resumes.
+# Run quire-translator as its own container on an uncommon, configurable port (48217).
+# Jobs (resume) and the household library persist on named volumes across restarts.
 services:
   quire-translator:
     build: .
     container_name: quire-translator
     restart: unless-stopped
-    # host:container — change the left side to move the published port.
     ports:
       - "${PORT:-48217}:48217"
     environment:
-      # Set PROVIDER_API_KEY to enable live DeepSeek translation; leave empty for the
-      # zero-cost fake provider. Prefer an .env file (see .env.example) over inlining.
+      # Shared household DeepSeek key. Leave empty for the zero-cost fake provider.
       PROVIDER_API_KEY: "${PROVIDER_API_KEY:-}"
       COST_CEILING_USD: "${COST_CEILING_USD:-10}"
-      HOST: "0.0.0.0"
+      TRANSLATION_REFINE: "${TRANSLATION_REFINE:-1}"
+      HOSTNAME: "0.0.0.0"
       PORT: "48217"
       JOBS_DIR: "/data/jobs"
+      LIBRARY_DIR: "/data/library"
     volumes:
       - quire-jobs:/data/jobs
+      - quire-library:/data/library
 
 volumes:
   quire-jobs:
+  quire-library:

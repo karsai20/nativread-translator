@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { unzipSync, strFromU8 } from "fflate";
-import { parseEpub, writeEpub } from "../src/core/epub.ts";
+import { parseEpub, writeEpub } from "../lib/core/epub.ts";
 import { buildFixtureEpub } from "./helpers/epub-fixture.ts";
 
 test("parses container -> OPF -> spine in order", () => {

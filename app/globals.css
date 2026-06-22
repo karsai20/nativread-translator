@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+/* Warm, editorial "book room" aesthetic — intentional, not a default template.
+   Cream paper, deep ink, rust accent. Light direction by choice (not auto dark). */
+@theme {
+  --color-background: oklch(98.5% 0.008 85);
+  --color-foreground: oklch(24% 0.02 60);
+
+  --color-card: oklch(100% 0 0);
+  --color-card-foreground: oklch(24% 0.02 60);
+
+  --color-primary: oklch(52% 0.16 28);
+  --color-primary-foreground: oklch(98.5% 0.008 85);
+
+  --color-muted: oklch(95% 0.012 80);
+  --color-muted-foreground: oklch(45% 0.02 60);
+
+  --color-accent: oklch(92% 0.04 40);
+  --color-accent-foreground: oklch(38% 0.12 28);
+
+  --color-border: oklch(88% 0.015 70);
+  --color-ring: oklch(52% 0.16 28);
+
+  --color-good: oklch(58% 0.13 150);
+  --color-destructive: oklch(55% 0.2 28);
+
+  --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --radius: 0.85rem;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  background:
+    radial-gradient(120% 80% at 50% -8%, var(--color-accent), transparent 60%),
+    var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+}
+
+/* Reader prose: serif, generous measure, the original shown muted beneath each block. */
+.prose-reader {
+  font-family: var(--font-serif);
+  font-size: 1.2rem;
+  line-height: 1.75;
+}
+.prose-reader h1,
+.prose-reader h2,
+.prose-reader h3 {
+  font-weight: 600;
+  line-height: 1.15;
+  margin: 0 0 0.6em;
+}
+.prose-reader p {
+  margin: 0 0 1rem;
+}
+.prose-reader .orig {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: 0.92rem;
+  color: var(--color-muted-foreground);
+  border-left: 2px solid var(--color-accent);
+  padding-left: 0.85rem;
+  margin: -0.4rem 0 1.4rem;
+}
+.prose-reader.hide-original .orig {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

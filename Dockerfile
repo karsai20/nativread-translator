@@ -1,26 +1,27 @@
-# quire-translator — runs as its own container on a Proxmox Docker host.
-FROM oven/bun:1.3
+# Multi-stage: build with Bun (fast, reproducible via bun.lock), run the Next.js
+# standalone output on Node. Runs as its own container on a Proxmox Docker host.
 
+FROM oven/bun:1.3 AS builder
 WORKDIR /app
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+COPY . .
+RUN bunx next build
 
-# Install deps first for layer caching.
-COPY package.json bun.lock* ./
-RUN bun install --production --frozen-lockfile || bun install --production
-
-# App source.
-COPY tsconfig.json ./
-COPY src ./src
-
-# Build the browser bundle at image build time.
-RUN bun run build:web
-
-# Persist per-job resume state on a volume.
-ENV JOBS_DIR=/data/jobs
-VOLUME ["/data/jobs"]
-
-# Bind all interfaces inside the container; an uncommon port by default.
-ENV HOST=0.0.0.0
+FROM node:22-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
 ENV PORT=48217
-EXPOSE 48217
+ENV JOBS_DIR=/data/jobs
+ENV LIBRARY_DIR=/data/library
 
-CMD ["bun", "run", "start"]
+# Standalone bundle + static assets (Next does not copy static into standalone).
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+
+RUN mkdir -p /data/jobs /data/library
+VOLUME ["/data/jobs", "/data/library"]
+
+EXPOSE 48217
+CMD ["node", "server.js"]

@@ -1,7 +1,12 @@
 node_modules/
+.next/
+out/
+next-env.d.ts
 jobs/
+library/
 .env
-src/web/dist/
+.env*.local
 *.log
 .DS_Store
 .claude/
+*.tsbuildinfo

@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { chunkSpineItem, CHUNK_CHAR_BUDGET } from "../src/core/chunker.ts";
+import { chunkSpineItem, CHUNK_CHAR_BUDGET } from "../lib/core/chunker.ts";
 
 const doc = (body: string) =>
   `<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body>${body}</body></html>`;

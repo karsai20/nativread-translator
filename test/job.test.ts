@@ -3,10 +3,10 @@ import { mkdtempSync, existsSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { runJob, readManifest } from "../src/core/job.ts";
-import { parseEpub } from "../src/core/epub.ts";
-import { FakeTranslator, FAKE_PREFIX } from "../src/core/providers/fake.ts";
-import type { Translator, TranslateChunkInput } from "../src/core/translator.ts";
+import { runJob, readManifest } from "../lib/core/job.ts";
+import { parseEpub } from "../lib/core/epub.ts";
+import { FakeTranslator, FAKE_PREFIX } from "../lib/core/providers/fake.ts";
+import type { Translator, TranslateChunkInput } from "../lib/core/translator.ts";
 import { buildFixtureEpub } from "./helpers/epub-fixture.ts";
 
 // Wraps the fake provider and counts how many times the provider is actually called,
@@ -39,7 +39,8 @@ test("full job translates the book and writes a valid EPUB", async () => {
   expect(state.status).toBe("done");
   expect(state.chunks.total).toBe(2); // one chunk per spine item
   expect(state.chunks.done).toBe(2);
-  expect(spy.calls).toBe(6); // 3 blocks per chapter
+  expect(spy.calls).toBe(2); // whole chunk translated in ONE call (context-aware)
+  expect(state.words).toBeGreaterThan(0);
 
   // Output EPUB is valid and contains translated, markup-preserving content.
   const out = readFileSync(join(jobDir, "output.epub"));
@@ -83,7 +84,7 @@ test("resume: only missing chunks are re-translated", async () => {
   const spy = new SpyTranslator();
   const state = await runJob({ id: "t3", epubBytes: buildFixtureEpub(), provider: spy, jobDir });
 
-  expect(spy.calls).toBe(3); // only chapter two's 3 blocks
+  expect(spy.calls).toBe(1); // only chapter two's chunk
   expect(state.status).toBe("done");
 
   rmSync(jobDir, { recursive: true, force: true });

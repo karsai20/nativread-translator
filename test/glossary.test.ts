@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { seedFromText, merge, formatForPrompt } from "../src/core/glossary.ts";
+import { seedFromText, merge, formatForPrompt } from "../lib/core/glossary.ts";
 
 test("seeds multi-word proper nouns on first sight", () => {
   const g = seedFromText("<p>Mr. Holloway met Sarah Holloway near New York.</p>");

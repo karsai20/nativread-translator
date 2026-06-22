@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { protect, restore, stripInlineTags } from "../src/core/markup.ts";
+import { protect, restore, stripInlineTags } from "../lib/core/markup.ts";
 
 test("protect/restore round-trips inline markup losslessly", () => {
   const html = 'He found a <a href="ch2.xhtml">letter</a> from <em>Sarah</em>.';

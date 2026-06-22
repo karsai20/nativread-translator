@@ -1,7 +1,11 @@
 node_modules
+.next
+out
 jobs
+library
 .env
-src/web/dist
+.env*.local
 .git
 *.log
 .DS_Store
+.claude

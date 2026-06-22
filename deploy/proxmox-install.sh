@@ -1,120 +1,114 @@
 #!/usr/bin/env bash
 # ===========================================================================
-# quire-translator — one-shot Proxmox installer.
+# quire-translator — one-shot Proxmox installer (Next.js standalone on Node).
 #
-# Paste this whole thing into the PROXMOX HOST shell (as root). It creates an
-# unprivileged Debian LXC, installs Bun, clones the app from GitHub, builds it,
-# and runs it as a systemd service on an uncommon port.
+# Paste into the PROXMOX HOST shell (as root). Creates an unprivileged Debian LXC,
+# installs Node, clones the app from GitHub, builds it, and runs the Next.js standalone
+# server as a systemd service on an uncommon port. The household library + job state
+# persist under /opt/quire-translator/data.
 #
-# The repo is PRIVATE, so provide a GitHub token with `repo` scope:
+# The repo is PRIVATE — provide a GitHub token with `repo` scope via GH_TOKEN:
 #
-#   GH_TOKEN=ghp_xxx bash -c "$(curl -fsSL \
-#     -H 'Authorization: token ghp_xxx' \
-#     https://raw.githubusercontent.com/karsai20/quire-translator/main/deploy/proxmox-install.sh)"
-#
-# ...or simply: set GH_TOKEN, paste the script body, run.
-#
-# Common overrides (all optional):
-#   CTID=150 PORT=48217 PROVIDER_API_KEY=sk-... GH_TOKEN=ghp_xxx ./proxmox-install.sh
+#   GH_TOKEN=ghp_xxx CTID=150 PORT=48217 PROVIDER_API_KEY=sk-deepseek \
+#     bash -c "$(curl -fsSL -H 'Authorization: token ghp_xxx' \
+#       https://raw.githubusercontent.com/karsai20/quire-translator/main/deploy/proxmox-install.sh)"
 # ===========================================================================
 set -euo pipefail
 
 # ---- Tunables ----
 GH_REPO="${GH_REPO:-karsai20/quire-translator}"
 BRANCH="${BRANCH:-main}"
-GH_TOKEN="${GH_TOKEN:-}"               # needed for the private repo
+GH_TOKEN="${GH_TOKEN:-}"
 
 CTID="${CTID:-150}"
 CT_HOSTNAME="${CT_HOSTNAME:-quire-translator}"
 PORT="${PORT:-48217}"
 CORES="${CORES:-2}"
 MEMORY_MB="${MEMORY_MB:-2048}"
-DISK_GB="${DISK_GB:-8}"
+DISK_GB="${DISK_GB:-10}"
 BRIDGE="${BRIDGE:-vmbr0}"
 STORAGE="${STORAGE:-local-lvm}"
 TEMPLATE_STORAGE="${TEMPLATE_STORAGE:-local}"
 TEMPLATE="${TEMPLATE:-debian-12-standard_12.7-1_amd64.tar.zst}"
-IPCONFIG="${IPCONFIG:-dhcp}"           # "dhcp" or e.g. "192.168.1.50/24"
-GATEWAY="${GATEWAY:-}"                 # set for static IP
+IPCONFIG="${IPCONFIG:-dhcp}"
+GATEWAY="${GATEWAY:-}"
+NODE_MAJOR="${NODE_MAJOR:-20}"
 
 PROVIDER_API_KEY="${PROVIDER_API_KEY:-}"
 COST_CEILING_USD="${COST_CEILING_USD:-10}"
+TRANSLATION_REFINE="${TRANSLATION_REFINE:-1}"
 APP_DST="/opt/quire-translator"
 
 log() { echo -e "\033[1;36m==>\033[0m $*"; }
-
-if [ -z "$GH_TOKEN" ]; then
-  echo "WARNING: GH_TOKEN is empty. The repo is private; the clone will fail without it." >&2
-fi
+[ -z "$GH_TOKEN" ] && echo "WARNING: GH_TOKEN empty; clone of the private repo will fail." >&2
 
 # ---- Create the container if missing ----
 if ! pct status "$CTID" >/dev/null 2>&1; then
   TEMPLATE_REF="${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}"
   if ! pveam list "$TEMPLATE_STORAGE" 2>/dev/null | grep -q "$TEMPLATE"; then
-    log "Downloading template $TEMPLATE"
-    pveam update || true
-    pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
+    log "Downloading template $TEMPLATE"; pveam update || true; pveam download "$TEMPLATE_STORAGE" "$TEMPLATE"
   fi
-
-  if [ "$IPCONFIG" = "dhcp" ]; then
-    NET="name=eth0,bridge=${BRIDGE},ip=dhcp"
-  else
-    NET="name=eth0,bridge=${BRIDGE},ip=${IPCONFIG}${GATEWAY:+,gw=$GATEWAY}"
-  fi
-
+  if [ "$IPCONFIG" = "dhcp" ]; then NET="name=eth0,bridge=${BRIDGE},ip=dhcp"
+  else NET="name=eth0,bridge=${BRIDGE},ip=${IPCONFIG}${GATEWAY:+,gw=$GATEWAY}"; fi
   log "Creating LXC $CTID ($CT_HOSTNAME)"
   pct create "$CTID" "$TEMPLATE_REF" \
-    --hostname "$CT_HOSTNAME" \
-    --cores "$CORES" \
-    --memory "$MEMORY_MB" \
-    --rootfs "${STORAGE}:${DISK_GB}" \
-    --net0 "$NET" \
-    --features nesting=1 \
-    --unprivileged 1 \
-    --onboot 1
+    --hostname "$CT_HOSTNAME" --cores "$CORES" --memory "$MEMORY_MB" \
+    --rootfs "${STORAGE}:${DISK_GB}" --net0 "$NET" \
+    --features nesting=1 --unprivileged 1 --onboot 1
 else
   log "CTID $CTID already exists; reusing it."
 fi
 
 pct start "$CTID" || true
-log "Waiting for container network…"
-sleep 6
+log "Waiting for container network…"; sleep 6
 
-# ---- Provision inside the container ----
+# ---- Provision ----
 CLONE_URL="https://github.com/${GH_REPO}.git"
 AUTH_URL="$CLONE_URL"
 [ -n "$GH_TOKEN" ] && AUTH_URL="https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git"
 
-log "Installing packages + Bun in the container"
-pct exec "$CTID" -- bash -lc '
+log "Installing Node ${NODE_MAJOR} + git in the container"
+pct exec "$CTID" -- bash -lc "
   set -e
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq curl git unzip ca-certificates >/dev/null
-  if [ ! -x /root/.bun/bin/bun ]; then curl -fsSL https://bun.sh/install | bash; fi
-  /root/.bun/bin/bun --version
-'
+  apt-get install -y -qq curl git ca-certificates >/dev/null
+  if ! command -v node >/dev/null || [ \"\$(node -v | cut -dv -f2 | cut -d. -f1)\" -lt ${NODE_MAJOR} ]; then
+    curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x | bash - >/dev/null
+    apt-get install -y -qq nodejs >/dev/null
+  fi
+  node -v && npm -v
+"
 
 log "Cloning ${GH_REPO}@${BRANCH}"
 pct exec "$CTID" -- bash -lc "
   set -e
   rm -rf '$APP_DST'
   git clone --branch '$BRANCH' --depth 1 '$AUTH_URL' '$APP_DST'
-  # Scrub the token from the saved remote.
-  git -C '$APP_DST' remote set-url origin '$CLONE_URL'
+  git -C '$APP_DST' remote set-url origin '$CLONE_URL'   # scrub token
 "
 
 log "Writing .env (port $PORT, provider: $([ -n "$PROVIDER_API_KEY" ] && echo deepseek || echo fake))"
 pct exec "$CTID" -- bash -lc "cat > $APP_DST/.env <<EOF
 PROVIDER_API_KEY=$PROVIDER_API_KEY
-HOST=0.0.0.0
 PORT=$PORT
-JOBS_DIR=$APP_DST/jobs
+HOSTNAME=0.0.0.0
+JOBS_DIR=$APP_DST/data/jobs
+LIBRARY_DIR=$APP_DST/data/library
 COST_CEILING_USD=$COST_CEILING_USD
-EOF"
+TRANSLATION_REFINE=$TRANSLATION_REFINE
+EOF
+mkdir -p $APP_DST/data/jobs $APP_DST/data/library"
 
-log "Installing deps + building web bundle"
-pct exec "$CTID" -- bash -lc "cd $APP_DST && /root/.bun/bin/bun install && /root/.bun/bin/bun run build:web"
+log "Building (npm install + next build + standalone assets)"
+pct exec "$CTID" -- bash -lc "
+  set -e
+  cd '$APP_DST'
+  npm install --no-audit --no-fund
+  npm run build
+  cp -r .next/static .next/standalone/.next/static
+  [ -d public ] && cp -r public .next/standalone/public || true
+"
 
 log "Installing + starting systemd service"
 pct exec "$CTID" -- bash -lc "
@@ -131,4 +125,4 @@ IP=$(pct exec "$CTID" -- bash -lc "hostname -I | awk '{print \$1}'" 2>/dev/null 
 echo
 log "Done. quire-translator is live at:  http://${IP}:${PORT}"
 echo "    Logs:    pct exec $CTID -- journalctl -u quire-translator -f"
-echo "    Update:  pct exec $CTID -- bash -lc 'cd $APP_DST && git pull && /root/.bun/bin/bun install && bun run build:web && systemctl restart quire-translator'"
+echo "    Update:  pct exec $CTID -- bash -lc 'cd $APP_DST && git pull && npm install && npm run build && cp -r .next/static .next/standalone/.next/static && systemctl restart quire-translator'"
