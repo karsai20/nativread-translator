@@ -1,0 +1,7 @@
+node_modules
+jobs
+.env
+src/web/dist
+.git
+*.log
+.DS_Store

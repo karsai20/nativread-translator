@@ -1,0 +1,23 @@
+{
+  "name": "quire-translator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Localhost-only web book translator (EN -> HU). Validation tool + reusable translation core for Quire.",
+  "scripts": {
+    "start": "bun run src/server/index.ts",
+    "dev": "bun --watch src/server/index.ts",
+    "build:web": "bun run src/web/build.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.5.0",
+    "fflate": "^0.8.2",
+    "node-html-parser": "^6.1.13"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}

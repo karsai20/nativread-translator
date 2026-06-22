@@ -1,0 +1,18 @@
+[Unit]
+Description=quire-translator (localhost web book translator)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/quire-translator
+# Bun installed for root inside the LXC (see proxmox-lxc-setup.sh).
+ExecStart=/root/.bun/bin/bun run start
+EnvironmentFile=/opt/quire-translator/.env
+Restart=always
+RestartSec=3
+# Resume state lives here; keep it on a persistent path.
+Environment=JOBS_DIR=/opt/quire-translator/jobs
+
+[Install]
+WantedBy=multi-user.target

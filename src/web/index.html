@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="hu">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Könyvfordító — magyarra</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="wordmark">Könyvfordító</div>
+      <p class="tagline">Tölts fel egy könyvet, és magyarul olvasd tovább.</p>
+    </header>
+
+    <main>
+      <!-- Step 1: upload -->
+      <section id="upload-view" aria-labelledby="upload-heading">
+        <h1 id="upload-heading">Melyik könyvet fordítsuk le?</h1>
+
+        <label class="dropzone" id="dropzone">
+          <input type="file" id="file-input" accept=".epub,application/epub+zip" hidden />
+          <span class="dropzone-icon" aria-hidden="true">↑</span>
+          <span class="dropzone-title">Válassz egy EPUB könyvet</span>
+          <span class="dropzone-hint">vagy húzd ide a fájlt</span>
+        </label>
+
+        <p class="disclosure" id="disclosure">
+          A fordításhoz a könyv szövege elküldésre kerül a fordítószolgáltatónak.
+        </p>
+
+        <button class="primary" id="start-btn" disabled>Fordítás indítása</button>
+      </section>
+
+      <!-- Step 2: progress -->
+      <section id="progress-view" hidden aria-labelledby="progress-heading">
+        <h1 id="progress-heading">Fordítás folyamatban…</h1>
+        <p class="muted" id="progress-detail">Előkészítés…</p>
+
+        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+
+        <dl class="stats">
+          <div><dt>Kész részek</dt><dd id="stat-chunks">0 / 0</dd></div>
+          <div><dt>Becsült költség</dt><dd id="stat-cost">$0.00</dd></div>
+        </dl>
+
+        <p class="muted small" id="resume-note">
+          Nyugodtan bezárhatod — az elkészült részek megmaradnak, és a fordítás onnan
+          folytatódik.
+        </p>
+      </section>
+
+      <!-- Step 3: reader -->
+      <section id="reader-view" hidden aria-labelledby="reader-heading">
+        <div class="reader-bar">
+          <h1 id="reader-heading">Kész!</h1>
+          <div class="reader-actions">
+            <button id="toggle-original" class="ghost" aria-pressed="false">
+              Eredeti megjelenítése
+            </button>
+            <a id="download-link" class="primary" download>Letöltés (EPUB)</a>
+          </div>
+        </div>
+        <article id="reader" class="reader hide-original"></article>
+      </section>
+
+      <!-- Error -->
+      <section id="error-view" hidden aria-live="assertive">
+        <h1>Hiba történt</h1>
+        <p class="error-text" id="error-text"></p>
+        <button class="ghost" id="retry-btn">Újrakezdés</button>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span id="provider-note"></span>
+    </footer>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
