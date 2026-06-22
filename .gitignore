@@ -2,8 +2,8 @@ node_modules/
 .next/
 out/
 next-env.d.ts
-jobs/
-library/
+/jobs/
+/library/
 .env
 .env*.local
 *.log
