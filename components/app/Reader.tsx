@@ -50,7 +50,7 @@ export function Reader({ items, downloadHref }: ReaderProps) {
   return (
     <section className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="font-serif text-3xl sm:text-4xl">Kész! Olvashatod.</h1>
+        <h1 className="display text-3xl font-semibold sm:text-4xl">Kész. Olvashatod.</h1>
         <div className="flex gap-2">
           {hasOriginal && (
             <Button variant="ghost" aria-pressed={showOriginal} onClick={() => setShowOriginal((v) => !v)}>

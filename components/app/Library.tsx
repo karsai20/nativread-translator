@@ -1,6 +1,6 @@
 "use client";
 
-import { Library as LibraryIcon, BookText } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import type { LibraryBook } from "./types";
 
 interface LibraryProps {
@@ -9,38 +9,44 @@ interface LibraryProps {
 }
 
 export function Library({ books, onOpen }: LibraryProps) {
-  if (books.length === 0) return null;
-
   return (
-    <section aria-labelledby="library-heading" className="space-y-4">
-      <h2 id="library-heading" className="flex items-center gap-2 font-serif text-2xl">
-        <LibraryIcon className="size-5 text-primary" />
-        Házi könyvtár
-      </h2>
-      <p className="text-sm text-muted-foreground">
-        Korábban lefordított könyvek — nem kell újrafordítani.
+    <section aria-labelledby="library-heading" className="rise">
+      <p className="mb-3 text-[0.7rem] font-medium uppercase tracking-[0.22em] text-muted-foreground">
+        A műhely könyvtára
       </p>
+      <h2 id="library-heading" className="display text-3xl font-semibold leading-tight sm:text-4xl">
+        Eddig lefordítva
+      </h2>
 
-      <ul className="grid gap-3 sm:grid-cols-2">
-        {books.map((b) => (
-          <li key={b.id}>
-            <button
-              onClick={() => onOpen(b.id)}
-              className="group flex w-full items-center gap-3 rounded-[var(--radius)] border border-border bg-card p-4 text-left transition-all hover:-translate-y-0.5 hover:border-primary hover:shadow-[0_14px_40px_-30px_var(--color-primary)]"
-            >
-              <span className="grid size-10 shrink-0 place-items-center rounded-md bg-accent text-accent-foreground">
-                <BookText className="size-5" />
-              </span>
-              <span className="min-w-0">
-                <span className="block truncate font-medium">{b.title}</span>
-                <span className="block text-sm text-muted-foreground">
-                  {b.words.toLocaleString("hu-HU")} szó · {new Date(b.createdAt).toLocaleDateString("hu-HU")}
+      {books.length === 0 ? (
+        <p className="mt-7 rounded-[var(--radius)] border border-dashed border-border px-5 py-8 text-sm text-muted-foreground">
+          Még üres. Az első lefordított könyv ide kerül, és nem kell újrafordítani.
+        </p>
+      ) : (
+        <ol className="mt-6">
+          {books.map((b, i) => (
+            <li key={b.id}>
+              <button
+                onClick={() => onOpen(b.id)}
+                className="group flex w-full items-center gap-4 border-b border-border py-4 text-left transition-colors hover:border-primary"
+              >
+                <span className="tnum display w-7 shrink-0 text-sm text-muted-foreground transition-colors group-hover:text-primary">
+                  {String(i + 1).padStart(2, "0")}
                 </span>
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium leading-snug transition-colors group-hover:text-primary">
+                    {b.title}
+                  </span>
+                  <span className="mt-0.5 block text-xs uppercase tracking-[0.12em] text-muted-foreground">
+                    {b.words.toLocaleString("hu-HU")} szó · {new Date(b.createdAt).toLocaleDateString("hu-HU")}
+                  </span>
+                </span>
+                <ArrowUpRight className="size-4 shrink-0 text-muted-foreground opacity-0 transition-all -translate-x-1 group-hover:translate-x-0 group-hover:text-primary group-hover:opacity-100" />
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
     </section>
   );
 }

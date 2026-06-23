@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { UploadCloud, BookOpen, Info } from "lucide-react";
+import { BookOpen, UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -18,15 +18,13 @@ export function Uploader({ providerName, onStart }: UploaderProps) {
   const pick = (f: File | null | undefined) => f && setFile(f);
 
   return (
-    <section aria-labelledby="upload-heading" className="space-y-6">
-      <div className="space-y-2">
-        <h1 id="upload-heading" className="font-serif text-4xl leading-tight text-balance sm:text-5xl">
-          Melyik könyvet fordítsuk le?
-        </h1>
-        <p className="text-muted-foreground">
-          Tölts fel egy EPUB könyvet, és pár perc múlva magyarul olvashatod.
-        </p>
-      </div>
+    <section aria-labelledby="upload-heading" className="rise">
+      <p className="mb-3 text-[0.7rem] font-medium uppercase tracking-[0.22em] text-muted-foreground">
+        Új kézirat
+      </p>
+      <h2 id="upload-heading" className="display text-balance text-3xl font-semibold leading-tight sm:text-4xl">
+        Melyik könyvet olvassuk magyarul?
+      </h2>
 
       <label
         onDragOver={(e) => {
@@ -40,9 +38,9 @@ export function Uploader({ providerName, onStart }: UploaderProps) {
           pick(e.dataTransfer.files?.[0]);
         }}
         className={cn(
-          "flex cursor-pointer flex-col items-center gap-3 rounded-[calc(var(--radius)+0.4rem)] border-2 border-dashed border-border bg-card px-6 py-14 text-center transition-all hover:-translate-y-0.5 hover:border-primary hover:shadow-[0_18px_50px_-30px_var(--color-primary)]",
-          drag && "border-primary -translate-y-0.5",
-          file && "border-good border-solid",
+          "group mt-7 flex cursor-pointer items-center gap-4 rounded-[var(--radius)] border border-border bg-card/60 px-5 py-5 transition-all hover:border-primary hover:bg-card",
+          drag && "border-primary bg-card",
+          file && "border-good/70",
         )}
       >
         <input
@@ -52,22 +50,28 @@ export function Uploader({ providerName, onStart }: UploaderProps) {
           className="hidden"
           onChange={(e) => pick(e.target.files?.[0])}
         />
-        <span className="grid size-14 place-items-center rounded-full bg-accent text-accent-foreground">
-          {file ? <BookOpen className="size-6" /> : <UploadCloud className="size-6" />}
+        <span
+          className={cn(
+            "grid size-12 shrink-0 place-items-center rounded-full bg-accent text-accent-foreground transition-transform group-hover:scale-105",
+            file && "bg-good/15 text-good",
+          )}
+        >
+          {file ? <BookOpen className="size-5" /> : <UploadCloud className="size-5" />}
         </span>
-        <span className="text-lg font-semibold">{file ? file.name : "Válassz egy EPUB könyvet"}</span>
-        <span className="text-sm text-muted-foreground">vagy húzd ide a fájlt</span>
+        <span className="min-w-0">
+          <span className="block truncate font-medium">{file ? file.name : "Válassz vagy húzz ide egy EPUB-ot"}</span>
+          <span className="block text-sm text-muted-foreground">
+            {file ? "Készen áll a fordításra" : "EPUB formátum, bármilyen méret"}
+          </span>
+        </span>
       </label>
 
-      <p className="flex items-start gap-2 rounded-[var(--radius)] border-l-2 border-primary bg-card px-4 py-3 text-sm text-muted-foreground">
-        <Info className="mt-0.5 size-4 shrink-0 text-primary" />
-        <span>
-          A fordításhoz a könyv szövege elküldésre kerül a fordítószolgáltatónak
-          {providerName === "fake" ? " (most teszt üzemmód, valódi küldés nélkül)" : ""}.
-        </span>
+      <p className="mt-4 text-[0.78rem] leading-relaxed text-muted-foreground">
+        A fordításhoz a könyv szövege a fordítószolgáltatóhoz kerül
+        {providerName === "fake" ? " — most teszt üzemmód, valódi küldés nélkül." : "."}
       </p>
 
-      <Button size="lg" disabled={!file} onClick={() => file && onStart(file)} className="w-full sm:w-auto">
+      <Button size="lg" disabled={!file} onClick={() => file && onStart(file)} className="mt-7 w-full sm:w-auto">
         Fordítás indítása
       </Button>
     </section>
