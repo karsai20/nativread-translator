@@ -5,6 +5,7 @@ import { Uploader } from "@/components/app/Uploader";
 import { ProgressView } from "@/components/app/ProgressView";
 import { Reader } from "@/components/app/Reader";
 import { Library } from "@/components/app/Library";
+import { RunningJobs } from "@/components/app/RunningJobs";
 import { Button } from "@/components/ui/button";
 import type { JobState, ReaderItem, LibraryBook } from "@/components/app/types";
 
@@ -116,6 +117,7 @@ export default function Home() {
         {view === "upload" && (
           <>
             <Uploader providerName={provider} onStart={start} />
+            <RunningJobs onChange={refreshLibrary} />
             <Library books={books} onOpen={openReader} />
           </>
         )}

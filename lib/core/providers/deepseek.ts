@@ -119,6 +119,7 @@ export class DeepSeekTranslator implements Translator {
     system: string,
     user: string,
     temperature: number = TEMPERATURE,
+    cancelSignal?: AbortSignal,
   ): Promise<TranslateChunkOutput> {
     return withRetry(
       async (signal) => {
@@ -159,19 +160,19 @@ export class DeepSeekTranslator implements Translator {
           usage: { inputTokens: json.usage?.prompt_tokens ?? 0, outputTokens: json.usage?.completion_tokens ?? 0 },
         };
       },
-      { retries: this.retries, timeoutMs: this.timeoutMs },
+      { retries: this.retries, timeoutMs: this.timeoutMs, signal: cancelSignal },
     );
   }
 
   translateChunk(input: TranslateChunkInput): Promise<TranslateChunkOutput> {
     const system = literarySystemPrompt(input.targetLang, formatForPrompt(input.glossary), input.previousContext);
-    return this.chat(system, input.text);
+    return this.chat(system, input.text, TEMPERATURE, input.signal);
   }
 
   refineChunk(input: RefineChunkInput): Promise<TranslateChunkOutput> {
     const system = refineSystemPrompt(input.targetLang, formatForPrompt(input.glossary), input.previousContext);
     const user = `Source (for reference only):\n${input.source}\n\nDraft to improve:\n${input.draft}`;
-    return this.chat(system, user);
+    return this.chat(system, user, TEMPERATURE, input.signal);
   }
 
   async resolveGlossary(input: ResolveGlossaryInput): Promise<GlossaryMap> {

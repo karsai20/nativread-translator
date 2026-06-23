@@ -5,7 +5,7 @@ import { parse } from "node-html-parser";
 import { parseEpub } from "@/lib/core/epub";
 import { libraryEpubPath } from "@/lib/core/library";
 import { loadConfig } from "@/lib/server/config";
-import { jobDirFor } from "@/lib/server/jobs";
+import { isValidJobId, jobDirFor } from "@/lib/server/jobs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,7 +24,7 @@ export async function GET(req: Request): Promise<Response> {
   const config = loadConfig();
   const url = new URL(req.url);
   const id = url.searchParams.get("id");
-  if (!id) return Response.json({ error: "Hiányzik a job azonosító." }, { status: 400 });
+  if (!isValidJobId(id)) return Response.json({ error: "Érvénytelen job azonosító." }, { status: 400 });
 
   const jobDir = jobDirFor(config, id);
   const jobOut = join(jobDir, "output.epub");

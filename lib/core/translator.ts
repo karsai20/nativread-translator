@@ -44,6 +44,8 @@ export interface TranslateChunkInput {
   glossary: GlossaryMap;
   /** Tail of the previously translated text, for seamless continuity. */
   previousContext?: string;
+  /** Cancellation signal: aborts the in-flight provider request when the job is terminated. */
+  signal?: AbortSignal;
 }
 
 export interface RefineChunkInput {
@@ -54,6 +56,8 @@ export interface RefineChunkInput {
   targetLang: string;
   glossary: GlossaryMap;
   previousContext?: string;
+  /** Cancellation signal: aborts the in-flight provider request when the job is terminated. */
+  signal?: AbortSignal;
 }
 
 export interface TranslateChunkOutput {
@@ -114,6 +118,8 @@ export interface TranslateBlocksOptions {
   previousContext?: string;
   /** Run the second polish pass when the provider supports it. */
   refine?: boolean;
+  /** Cancellation signal forwarded to the provider so a terminated job aborts mid-request. */
+  signal?: AbortSignal;
 }
 
 export interface TranslateBlocksResult {
@@ -173,6 +179,7 @@ export async function translateBlocks(
     targetLang: TARGET_LANG,
     glossary: opts.glossary,
     previousContext: opts.previousContext,
+    signal: opts.signal,
   });
   usage = addUsage(usage, draft.usage);
 
@@ -184,6 +191,7 @@ export async function translateBlocks(
       targetLang: TARGET_LANG,
       glossary: opts.glossary,
       previousContext: opts.previousContext,
+      signal: opts.signal,
     });
     usage = addUsage(usage, refined.usage);
     finalText = refined.text;
@@ -225,6 +233,7 @@ async function translateBlocksIndividually(
       targetLang: TARGET_LANG,
       glossary: opts.glossary,
       previousContext: opts.previousContext,
+      signal: opts.signal,
     });
     usage = addUsage(usage, res.usage);
     // Strip any stray block markers the model may have echoed, then restore tags.

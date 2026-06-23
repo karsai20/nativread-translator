@@ -26,8 +26,11 @@ import {
   type CostState,
 } from "./cost";
 import { saveToLibrary, hashSource } from "./library";
+import { CancelledError } from "./retry";
 
-export type JobStatus = "pending" | "running" | "done" | "error";
+// "stopped" = user-terminated but resumable: finished chunks stay on disk, so re-running
+// the job picks up where it left off and nothing already paid for is re-translated.
+export type JobStatus = "pending" | "running" | "done" | "error" | "stopped";
 
 export interface JobState {
   id: string;
@@ -62,6 +65,8 @@ export interface RunJobOptions {
   /** If set, the finished book is saved into this household library dir. */
   libraryDir?: string;
   onProgress?: (state: JobState) => void;
+  /** Cancellation signal: aborts the in-flight request and stops the job (resumable). */
+  signal?: AbortSignal;
 }
 
 function chunkFilePath(jobDir: string, key: string): string {
@@ -177,6 +182,10 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
 
   try {
     for (const chunk of allChunks) {
+      // Stop cleanly at a chunk boundary if the job was terminated (already-done chunks
+      // are persisted, so the job stays resumable).
+      if (opts.signal?.aborted) throw new CancelledError();
+
       const cached = loadChunkResult(jobDir, chunk.key);
       if (cached) {
         results.set(chunk.key, cached);
@@ -193,6 +202,7 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
         glossary,
         previousContext: prevTail || undefined,
         refine: opts.refine,
+        signal: opts.signal,
       });
 
       const result: ChunkResult = { key: chunk.key, blocks, plainText };
@@ -247,6 +257,14 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     onProgress?.(state);
     return state;
   } catch (err) {
+    // A user-requested stop is a normal outcome, not a failure: mark it resumable and
+    // return rather than throw, so the caller doesn't log it as a crash.
+    if (err instanceof CancelledError) {
+      state = { ...state, status: "stopped", error: undefined };
+      writeManifest(jobDir, state);
+      onProgress?.(state);
+      return state;
+    }
     state = { ...state, status: "error", error: err instanceof Error ? err.message : String(err) };
     writeManifest(jobDir, state);
     onProgress?.(state);

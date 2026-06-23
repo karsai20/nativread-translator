@@ -1,6 +1,6 @@
 export interface JobState {
   id: string;
-  status: "pending" | "running" | "done" | "error";
+  status: "pending" | "running" | "done" | "error" | "stopped";
   provider: string;
   title?: string;
   words: number;
@@ -9,6 +9,9 @@ export interface JobState {
   cost: { usd: number; ceilingUsd: number };
   error?: string;
 }
+
+/** A job plus whether it is actively running in the server process right now. */
+export type JobSummary = JobState & { running: boolean };
 
 export interface ReaderItem {
   href: string;

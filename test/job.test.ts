@@ -21,6 +21,21 @@ class SpyTranslator implements Translator {
   }
 }
 
+// Aborts the given controller right after the FIRST chunk is translated, so the next
+// loop iteration sees the cancellation — proving the job stops resumably mid-book.
+class AbortAfterFirst implements Translator {
+  readonly name = "fake";
+  calls = 0;
+  private inner = new FakeTranslator();
+  constructor(private readonly controller: AbortController) {}
+  async translateChunk(input: TranslateChunkInput) {
+    this.calls += 1;
+    const out = await this.inner.translateChunk(input);
+    if (this.calls === 1) this.controller.abort();
+    return out;
+  }
+}
+
 function freshJobDir(): string {
   return mkdtempSync(join(tmpdir(), "quire-job-"));
 }
@@ -86,6 +101,38 @@ test("resume: only missing chunks are re-translated", async () => {
 
   expect(spy.calls).toBe(1); // only chapter two's chunk
   expect(state.status).toBe("done");
+
+  rmSync(jobDir, { recursive: true, force: true });
+});
+
+test("stop: an aborted job stops resumably, keeping finished chunks", async () => {
+  const jobDir = freshJobDir();
+  const ac = new AbortController();
+  const provider = new AbortAfterFirst(ac);
+
+  const state = await runJob({
+    id: "tc",
+    epubBytes: buildFixtureEpub(),
+    provider,
+    jobDir,
+    signal: ac.signal,
+  });
+
+  expect(state.status).toBe("stopped"); // resumable, not "error"
+  expect(state.error).toBeUndefined();
+  expect(provider.calls).toBe(1); // stopped before the second chunk
+  expect(state.chunks.done).toBe(1);
+
+  // The first chunk is persisted, so a later resume continues instead of re-paying.
+  const ch1 = join(jobDir, "chunks", `${encodeURIComponent("OEBPS/ch1.xhtml#0")}.json`);
+  expect(existsSync(ch1)).toBe(true);
+  expect(existsSync(join(jobDir, "output.epub"))).toBe(false);
+
+  // Resume to completion with a normal provider; the kept chunk is not re-translated.
+  const spy = new SpyTranslator();
+  const resumed = await runJob({ id: "tc", epubBytes: buildFixtureEpub(), provider: spy, jobDir });
+  expect(resumed.status).toBe("done");
+  expect(spy.calls).toBe(1); // only the remaining chunk
 
   rmSync(jobDir, { recursive: true, force: true });
 });
