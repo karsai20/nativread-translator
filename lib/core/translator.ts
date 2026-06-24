@@ -25,6 +25,8 @@ import {
   BLOCK_MARKER_OPEN,
   BLOCK_MARKER_CLOSE,
 } from "./markup";
+import { validateChunk, type ValidateOptions } from "./quality/validators";
+import { routeDraft, MAX_QUALITY_ITERATIONS, type PrecisionMode } from "./quality/route";
 
 const BLOCK_MARKER_RE = new RegExp(`${BLOCK_MARKER_OPEN}\\d*${BLOCK_MARKER_CLOSE}?`, "g");
 
@@ -134,6 +136,14 @@ export interface TranslateBlocksOptions {
    * Only takes effect alongside selectiveRefine.
    */
   reasonerForHard?: boolean;
+  /** Quality mode; tunes the local validators' length bands and back-translation. */
+  precision?: PrecisionMode;
+}
+
+/** Mode-dependent length-ratio band for the omission check (HU renders near EN length). */
+function lengthBand(mode: PrecisionMode | undefined): ValidateOptions {
+  if (mode === "fidelity") return { minLengthRatio: 0.7, maxLengthRatio: 2.0 };
+  return { minLengthRatio: 0.55, maxLengthRatio: 2.4 };
 }
 
 export interface TranslateBlocksResult {
@@ -202,37 +212,64 @@ export async function translateBlocks(
 
   let finalText = draft.text;
   if (opts.refine && provider.refineChunk) {
-    // Selective refinement: judge the draft first and only pay for the full second
-    // pass when it is weak. Falls back to unconditional refine if the provider can't
-    // estimate, or estimating fails (conservative: never silently lose the polish).
-    let doRefine = true;
-    let deep = false;
-    if (opts.selectiveRefine && provider.estimateChunk) {
-      try {
-        const verdict = await provider.estimateChunk({
-          source: payload,
-          draft: draft.text,
-          targetLang: TARGET_LANG,
-          glossary: opts.glossary,
-        });
-        usage = addUsage(usage, verdict.usage);
-        doRefine = verdict.needsRefine;
-        deep = Boolean(opts.reasonerForHard && verdict.hard);
-      } catch {
-        doRefine = true;
-      }
-    }
-    if (doRefine) {
+    if (!opts.selectiveRefine) {
+      // Legacy unconditional refine: one polish pass, no quality gate.
       const refined = await provider.refineChunk({
         source: payload,
-        draft: draft.text,
+        draft: finalText,
         targetLang: TARGET_LANG,
         glossary: opts.glossary,
         previousContext: opts.previousContext,
-        deep,
+        deep: false,
       });
       usage = addUsage(usage, refined.usage);
       finalText = refined.text;
+    } else {
+      // Adaptive pipeline: local validators + judge -> routed, bounded refinement.
+      const mode: PrecisionMode = opts.precision ?? "balanced";
+      const band = lengthBand(mode);
+
+      for (let iteration = 0; iteration < MAX_QUALITY_ITERATIONS; iteration++) {
+        const local = validateChunk(
+          {
+            sourcePlain: toPlainText(payload),
+            targetPlain: toPlainText(finalText),
+            sourceTokenized: payload,
+            targetTokenized: finalText,
+            glossary: opts.glossary,
+          },
+          band,
+        );
+
+        let verdict;
+        if (provider.estimateChunk) {
+          try {
+            verdict = await provider.estimateChunk({
+              source: payload,
+              draft: finalText,
+              targetLang: TARGET_LANG,
+              glossary: opts.glossary,
+            });
+            usage = addUsage(usage, verdict.usage);
+          } catch {
+            verdict = undefined;
+          }
+        }
+
+        const decision = routeDraft({ local, verdict, mode, iteration });
+        if (decision.action === "accept") break;
+
+        const refined = await provider.refineChunk({
+          source: payload,
+          draft: finalText,
+          targetLang: TARGET_LANG,
+          glossary: opts.glossary,
+          previousContext: opts.previousContext,
+          deep: decision.deep && Boolean(opts.reasonerForHard),
+        });
+        usage = addUsage(usage, refined.usage);
+        finalText = refined.text;
+      }
     }
   }
 

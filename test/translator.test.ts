@@ -66,7 +66,10 @@ test("selective refine runs the polish when the estimate judges the draft weak",
   };
 
   const res = await translateBlocks(weakJudge, blocks, { glossary: {}, refine: true, selectiveRefine: true });
-  expect(estimateCalls).toBe(1);
+  // The adaptive loop re-judges after each refine (bounded by MAX_QUALITY_ITERATIONS),
+  // so a persistently weak draft is judged 1–2 times and gets the polish.
+  expect(estimateCalls).toBeGreaterThanOrEqual(1);
+  expect(estimateCalls).toBeLessThanOrEqual(2);
   expect(res.blocks[0]!.html).toContain(FAKE_REFINE_TAG);
 });
 
