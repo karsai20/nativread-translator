@@ -46,6 +46,8 @@ export interface JobState {
   finishedAt?: string;
   /** Durations (ms) of the most recent translated chunks, newest last, capped. */
   chunkDurationsMs?: number[];
+  /** Effective parallel worker count, so ETA reflects parallelism (not sequential). */
+  concurrency?: number;
 }
 
 interface ChunkResult {
@@ -220,6 +222,13 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     groups[gi]!.push(chunk);
   }
 
+  // Effective parallelism is capped by the number of chapters: a book that is one big
+  // spine item runs sequentially no matter the concurrency setting. Record it so the
+  // ETA divides by real parallelism instead of assuming a single stream.
+  const concurrency = Math.max(1, opts.concurrency ?? DEFAULT_CONCURRENCY);
+  const workerCount = Math.min(concurrency, groups.length || 1);
+  state = persist(jobDir, { ...state, concurrency: workerCount }, onProgress);
+
   // Shared, cooperative loop controls. JS is single-threaded, so the synchronous
   // read-modify-write of `state` between awaits is atomic across workers — no locking.
   let stopSignal: "pause" | "cancel" | undefined;
@@ -286,8 +295,6 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
   };
 
   try {
-    const concurrency = Math.max(1, opts.concurrency ?? DEFAULT_CONCURRENCY);
-    const workerCount = Math.min(concurrency, groups.length || 1);
     await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
     if (stopSignal) {

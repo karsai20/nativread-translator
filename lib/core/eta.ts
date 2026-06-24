@@ -23,5 +23,9 @@ export function jobMetrics(state: JobState): JobMetrics {
   const avgMs = durations.reduce((sum, d) => sum + d, 0) / durations.length;
   if (avgMs <= 0) return { pct };
 
-  return { pct, etaMs: avgMs * remaining, chunksPerMin: 60_000 / avgMs };
+  // Chunks run in parallel, so wall-clock throughput is per-chunk latency divided across
+  // the active workers. Near the end fewer chunks remain than workers, so cap by remaining.
+  const workers = Math.max(1, Math.min(state.concurrency ?? 1, remaining));
+
+  return { pct, etaMs: (avgMs * remaining) / workers, chunksPerMin: (60_000 / avgMs) * workers };
 }

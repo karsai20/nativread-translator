@@ -28,6 +28,29 @@ test("jobMetrics computes eta and throughput from the duration window", () => {
   expect(m.chunksPerMin).toBe(30); // 60000 / 2000
 });
 
+test("jobMetrics divides eta by the parallel worker count", () => {
+  const state = baseState({
+    chunks: { total: 10, done: 4 }, // 6 remaining
+    chunkDurationsMs: [2000, 2000, 2000, 2000], // avg 2s
+    concurrency: 4,
+  });
+
+  const m = jobMetrics(state);
+  expect(m.etaMs).toBe(3000); // 2s * 6 / 4 workers
+  expect(m.chunksPerMin).toBe(120); // 30 * 4
+});
+
+test("jobMetrics caps the worker divisor by the remaining chunks near the end", () => {
+  const state = baseState({
+    chunks: { total: 10, done: 8 }, // only 2 remaining
+    chunkDurationsMs: [2000],
+    concurrency: 4,
+  });
+
+  const m = jobMetrics(state);
+  expect(m.etaMs).toBe(2000); // 2s * 2 / min(4,2)=2 workers
+});
+
 test("jobMetrics returns only pct when there is no timing data (back-compat manifest)", () => {
   const state = baseState({ chunks: { total: 10, done: 4 }, chunkDurationsMs: undefined });
   const m = jobMetrics(state);
