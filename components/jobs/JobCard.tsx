@@ -39,7 +39,9 @@ export function JobCard({ job, onPause, onResume, onCancel, onDelete }: JobCardP
     <Card className="p-5">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 space-y-1.5">
-          <h3 className="font-serif text-lg font-semibold leading-tight">{title}</h3>
+          <h3 className="font-serif text-lg font-semibold leading-tight line-clamp-2 break-words" title={title}>
+            {title}
+          </h3>
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <StatusBadge status={job.status} />
             <span className="capitalize">{job.provider}</span>

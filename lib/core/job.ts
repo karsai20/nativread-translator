@@ -59,6 +59,12 @@ const DEFAULT_CEILING_USD = 10;
 const CONTEXT_TAIL_CHARS = 600;
 /** How many recent chunk durations to keep for a responsive ETA. */
 const TIMING_WINDOW = 20;
+/**
+ * How many spine items (chapters) to translate at once. Chunks WITHIN a chapter stay
+ * sequential so the rolling continuity tail is preserved where it matters; independent
+ * chapters run in parallel, which is the bulk of the speedup on a real book.
+ */
+const DEFAULT_CONCURRENCY = 4;
 
 export interface RunJobOptions {
   id: string;
@@ -68,6 +74,12 @@ export interface RunJobOptions {
   ceilingUsd?: number;
   /** Run the second polish pass (quality up, ~2x cost/time). */
   refine?: boolean;
+  /** Gate the refine pass on a per-chunk quality estimate (skip it for strong drafts). */
+  selectiveRefine?: boolean;
+  /** Refine the hardest chunks on a reasoning model (needs selectiveRefine). */
+  reasonerForHard?: boolean;
+  /** Chapters translated in parallel. Defaults to DEFAULT_CONCURRENCY. */
+  concurrency?: number;
   /** If set, the finished book is saved into this household library dir. */
   libraryDir?: string;
   onProgress?: (state: JobState) => void;
@@ -184,7 +196,8 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     words: countWords(epub),
     spineItemCount: epub.spine.length,
     chunks: { total: allChunks.length, done: doneAtStart },
-    cost: prior?.cost ? { ...prior.cost, ceilingUsd } : createCostState(ceilingUsd),
+    // Default cachedInputTokens for manifests written before cache-aware pricing existed.
+    cost: prior?.cost ? { ...createCostState(ceilingUsd), ...prior.cost, ceilingUsd } : createCostState(ceilingUsd),
     createdAt: prior?.createdAt ?? nowIso(),
     startedAt: prior?.startedAt ?? nowIso(),
     chunkDurationsMs: prior?.chunkDurationsMs ?? [],
@@ -192,55 +205,98 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
   state = persist(jobDir, state, onProgress);
 
   const results = new Map<string, ChunkResult>();
-  let prevTail = "";
+
+  // Group chunks by chapter (spine item). Within a group we stay sequential so the
+  // continuity tail carries; groups themselves run in parallel across workers.
+  const groups: Chunk[][] = [];
+  const groupIndexByHref = new Map<string, number>();
+  for (const chunk of allChunks) {
+    let gi = groupIndexByHref.get(chunk.itemHref);
+    if (gi === undefined) {
+      gi = groups.length;
+      groupIndexByHref.set(chunk.itemHref, gi);
+      groups.push([]);
+    }
+    groups[gi]!.push(chunk);
+  }
+
+  // Shared, cooperative loop controls. JS is single-threaded, so the synchronous
+  // read-modify-write of `state` between awaits is atomic across workers — no locking.
+  let stopSignal: "pause" | "cancel" | undefined;
+  let ceilingHit = false;
+  let nextGroup = 0;
+
+  const processChunk = async (chunk: Chunk, prevTail: string): Promise<string> => {
+    const cached = loadChunkResult(jobDir, chunk.key);
+    if (cached) {
+      results.set(chunk.key, cached);
+      return tail(cached.plainText || prevTail);
+    }
+
+    const chunkChars = chunk.blocks.reduce((n, b) => n + b.innerHtml.length, 0);
+    if (wouldExceedCeiling(state.cost, estimateTokensFromChars(chunkChars))) {
+      ceilingHit = true;
+      return prevTail;
+    }
+
+    const startedMs = Date.now();
+    const { blocks, usage, plainText } = await translateBlocks(provider, chunk.blocks, {
+      glossary,
+      previousContext: prevTail || undefined,
+      refine: opts.refine,
+      selectiveRefine: opts.selectiveRefine,
+      reasonerForHard: opts.reasonerForHard,
+    });
+    const durationMs = Date.now() - startedMs;
+
+    const result: ChunkResult = { key: chunk.key, blocks, plainText };
+    saveChunkResult(jobDir, result);
+    results.set(chunk.key, result);
+
+    state = {
+      ...state,
+      chunks: { ...state.chunks, done: state.chunks.done + 1 },
+      cost: addUsage(state.cost, usage),
+      chunkDurationsMs: [...(state.chunkDurationsMs ?? []), durationMs].slice(-TIMING_WINDOW),
+    };
+    state = persist(jobDir, state, onProgress);
+
+    return tail(plainText || prevTail);
+  };
+
+  const worker = async (): Promise<void> => {
+    while (true) {
+      if (stopSignal || ceilingHit) return;
+      const gi = nextGroup++;
+      if (gi >= groups.length) return;
+
+      let prevTail = "";
+      for (const chunk of groups[gi]!) {
+        if (stopSignal || ceilingHit) return;
+        // Cooperative stop point, polled once per chunk: a paused job keeps its chunk
+        // cache (resumes for free), a cancelled job ends. Neither throws.
+        const signal = opts.shouldStop?.();
+        if (signal) {
+          stopSignal = signal;
+          return;
+        }
+        prevTail = await processChunk(chunk, prevTail);
+      }
+    }
+  };
 
   try {
-    for (const chunk of allChunks) {
-      // Cooperative stop point: a paused job keeps its chunk cache (resumes for free),
-      // a cancelled job ends. Neither throws.
-      const signal = opts.shouldStop?.();
-      if (signal) {
-        const status: JobStatus = signal === "pause" ? "paused" : "cancelled";
-        state = {
-          ...state,
-          status,
-          ...(status === "cancelled" ? { finishedAt: nowIso() } : {}),
-        };
-        return persist(jobDir, state, onProgress);
-      }
+    const concurrency = Math.max(1, opts.concurrency ?? DEFAULT_CONCURRENCY);
+    const workerCount = Math.min(concurrency, groups.length || 1);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
-      const cached = loadChunkResult(jobDir, chunk.key);
-      if (cached) {
-        results.set(chunk.key, cached);
-        prevTail = tail(cached.plainText || prevTail);
-        continue;
-      }
-
-      const chunkChars = chunk.blocks.reduce((n, b) => n + b.innerHtml.length, 0);
-      if (wouldExceedCeiling(state.cost, estimateTokensFromChars(chunkChars))) {
-        throw new CostCeilingError(state.cost);
-      }
-
-      const startedMs = Date.now();
-      const { blocks, usage, plainText } = await translateBlocks(provider, chunk.blocks, {
-        glossary,
-        previousContext: prevTail || undefined,
-        refine: opts.refine,
-      });
-      const durationMs = Date.now() - startedMs;
-
-      const result: ChunkResult = { key: chunk.key, blocks, plainText };
-      saveChunkResult(jobDir, result);
-      results.set(chunk.key, result);
-      prevTail = tail(plainText || prevTail);
-
-      state = {
-        ...state,
-        chunks: { ...state.chunks, done: state.chunks.done + 1 },
-        cost: addUsage(state.cost, usage),
-        chunkDurationsMs: [...(state.chunkDurationsMs ?? []), durationMs].slice(-TIMING_WINDOW),
-      };
-      state = persist(jobDir, state, onProgress);
+    if (stopSignal) {
+      const status: JobStatus = stopSignal === "pause" ? "paused" : "cancelled";
+      state = { ...state, status, ...(status === "cancelled" ? { finishedAt: nowIso() } : {}) };
+      return persist(jobDir, state, onProgress);
+    }
+    if (ceilingHit) {
+      throw new CostCeilingError(state.cost);
     }
 
     // Re-stitch translated inner HTML back into each spine item's blocks.

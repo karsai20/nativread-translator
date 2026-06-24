@@ -37,7 +37,7 @@ export function JobControls({ id, status, title, onPause, onResume, onCancel, on
   const canCancel = status === "running" || status === "pending" || status === "paused";
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex shrink-0 items-center gap-2">
       {canResume && (
         <IconButton label={status === "paused" ? "Folytatás" : "Újraindítás"} onClick={() => onResume(id)}>
           <Play />

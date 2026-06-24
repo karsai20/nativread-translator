@@ -34,6 +34,13 @@ export const TARGET_LANG = "Hungarian";
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
+  /**
+   * Portion of inputTokens that DeepSeek served from its context cache (billed at the
+   * much cheaper cache-hit rate). Repeated system prompt + glossary + continuity context
+   * make this large in practice, so tracking it is what makes our cost match the
+   * provider's dashboard.
+   */
+  cachedInputTokens?: number;
 }
 
 export interface TranslateChunkInput {
@@ -54,10 +61,31 @@ export interface RefineChunkInput {
   targetLang: string;
   glossary: GlossaryMap;
   previousContext?: string;
+  /** Escalate this refine to a slower reasoning model (for the hardest passages). */
+  deep?: boolean;
 }
 
 export interface TranslateChunkOutput {
   text: string;
+  usage?: TokenUsage;
+}
+
+export interface EstimateChunkInput {
+  /** The tokenized source payload. */
+  source: string;
+  /** The draft translation to judge. */
+  draft: string;
+  targetLang: string;
+  glossary: GlossaryMap;
+}
+
+export interface EstimateChunkOutput {
+  /** Whether the draft is weak enough to warrant a refine pass. */
+  needsRefine: boolean;
+  /** Whether the draft is weak enough to warrant the slower reasoning model. */
+  hard?: boolean;
+  /** 1–5 quality score when the provider produced one (5 = publishable as-is). */
+  score?: number;
   usage?: TokenUsage;
 }
 
@@ -66,6 +94,12 @@ export interface Translator {
   translateChunk(input: TranslateChunkInput): Promise<TranslateChunkOutput>;
   /** Optional second-pass polish. If absent, refinement is skipped. */
   refineChunk?(input: RefineChunkInput): Promise<TranslateChunkOutput>;
+  /**
+   * Optional cheap quality gate (TEaR "Estimate" step): judges a draft and reports
+   * whether it needs the expensive refine pass. Output is tiny, so good drafts skip the
+   * full second generation — the bulk of the cost/time saving of selective refinement.
+   */
+  estimateChunk?(input: EstimateChunkInput): Promise<EstimateChunkOutput>;
 }
 
 export interface BlockInput {
@@ -83,6 +117,17 @@ export interface TranslateBlocksOptions {
   previousContext?: string;
   /** Run the second polish pass when the provider supports it. */
   refine?: boolean;
+  /**
+   * Gate the refine pass on a cheap quality estimate (TEaR): only drafts the provider
+   * judges weak get refined. Requires the provider to implement estimateChunk; otherwise
+   * refinement stays unconditional.
+   */
+  selectiveRefine?: boolean;
+  /**
+   * For the hardest drafts (per the estimate), run the refine on a reasoning model.
+   * Only takes effect alongside selectiveRefine.
+   */
+  reasonerForHard?: boolean;
 }
 
 export interface TranslateBlocksResult {
@@ -96,7 +141,11 @@ const EMPTY_USAGE: TokenUsage = { inputTokens: 0, outputTokens: 0 };
 
 function addUsage(a: TokenUsage, b?: TokenUsage): TokenUsage {
   if (!b) return a;
-  return { inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens };
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    cachedInputTokens: (a.cachedInputTokens ?? 0) + (b.cachedInputTokens ?? 0),
+  };
 }
 
 function toPlainText(html: string): string {
@@ -147,15 +196,38 @@ export async function translateBlocks(
 
   let finalText = draft.text;
   if (opts.refine && provider.refineChunk) {
-    const refined = await provider.refineChunk({
-      source: payload,
-      draft: draft.text,
-      targetLang: TARGET_LANG,
-      glossary: opts.glossary,
-      previousContext: opts.previousContext,
-    });
-    usage = addUsage(usage, refined.usage);
-    finalText = refined.text;
+    // Selective refinement: judge the draft first and only pay for the full second
+    // pass when it is weak. Falls back to unconditional refine if the provider can't
+    // estimate, or estimating fails (conservative: never silently lose the polish).
+    let doRefine = true;
+    let deep = false;
+    if (opts.selectiveRefine && provider.estimateChunk) {
+      try {
+        const verdict = await provider.estimateChunk({
+          source: payload,
+          draft: draft.text,
+          targetLang: TARGET_LANG,
+          glossary: opts.glossary,
+        });
+        usage = addUsage(usage, verdict.usage);
+        doRefine = verdict.needsRefine;
+        deep = Boolean(opts.reasonerForHard && verdict.hard);
+      } catch {
+        doRefine = true;
+      }
+    }
+    if (doRefine) {
+      const refined = await provider.refineChunk({
+        source: payload,
+        draft: draft.text,
+        targetLang: TARGET_LANG,
+        glossary: opts.glossary,
+        previousContext: opts.previousContext,
+        deep,
+      });
+      usage = addUsage(usage, refined.usage);
+      finalText = refined.text;
+    }
   }
 
   const segments = splitBlockSegments(finalText);

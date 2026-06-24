@@ -42,6 +42,58 @@ test("refine pass runs when enabled and provider supports it", async () => {
   expect(res.blocks[0]!.html).toContain(FAKE_REFINE_TAG);
 });
 
+test("selective refine skips the polish when the estimate judges the draft strong", async () => {
+  // The fake estimator returns needsRefine:false, so no refine tag should appear.
+  const res = await translateBlocks(new FakeTranslator(), blocks, {
+    glossary: {},
+    refine: true,
+    selectiveRefine: true,
+  });
+  expect(res.blocks[0]!.html).not.toContain(FAKE_REFINE_TAG);
+});
+
+test("selective refine runs the polish when the estimate judges the draft weak", async () => {
+  const fake = new FakeTranslator();
+  let estimateCalls = 0;
+  const weakJudge: Translator = {
+    name: "weak-judge",
+    translateChunk: (input) => fake.translateChunk(input),
+    refineChunk: (input) => fake.refineChunk(input),
+    async estimateChunk(input) {
+      estimateCalls += 1;
+      return { needsRefine: true, score: 2, usage: { inputTokens: 1, outputTokens: 1 } };
+    },
+  };
+
+  const res = await translateBlocks(weakJudge, blocks, { glossary: {}, refine: true, selectiveRefine: true });
+  expect(estimateCalls).toBe(1);
+  expect(res.blocks[0]!.html).toContain(FAKE_REFINE_TAG);
+});
+
+test("the hardest drafts are refined with the deep (reasoning) flag", async () => {
+  const fake = new FakeTranslator();
+  let deepSeen: boolean | undefined;
+  const hardJudge: Translator = {
+    name: "hard-judge",
+    translateChunk: (input) => fake.translateChunk(input),
+    refineChunk: (input) => {
+      deepSeen = input.deep;
+      return fake.refineChunk(input);
+    },
+    async estimateChunk() {
+      return { needsRefine: true, hard: true, score: 1, usage: { inputTokens: 1, outputTokens: 1 } };
+    },
+  };
+
+  await translateBlocks(hardJudge, blocks, {
+    glossary: {},
+    refine: true,
+    selectiveRefine: true,
+    reasonerForHard: true,
+  });
+  expect(deepSeen).toBe(true);
+});
+
 test("falls back to per-block translation when a block marker goes missing", async () => {
   let calls = 0;
   // A broken provider that strips all markers on the first (multi-block) call, forcing

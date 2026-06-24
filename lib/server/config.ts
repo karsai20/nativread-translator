@@ -16,6 +16,9 @@ export interface ServerConfig {
   apiKey: string;
   providerName: "deepseek" | "fake";
   refine: boolean;
+  refineSelective: boolean;
+  reasonerForHard: boolean;
+  concurrency: number;
 }
 
 export function loadConfig(): ServerConfig {
@@ -28,6 +31,13 @@ export function loadConfig(): ServerConfig {
     providerName: apiKey ? "deepseek" : "fake",
     // Second polish pass is on by default (quality is the priority; DeepSeek is cheap).
     refine: (process.env.TRANSLATION_REFINE ?? "1") !== "0",
+    // Gate that polish on a cheap quality estimate by default: only weak drafts pay for
+    // the full second pass. Set TRANSLATION_REFINE_SELECTIVE=0 to refine every chunk.
+    refineSelective: (process.env.TRANSLATION_REFINE_SELECTIVE ?? "1") !== "0",
+    // Escalate the weakest chunks to the reasoning model (deepseek-reasoner) for refine.
+    reasonerForHard: (process.env.TRANSLATION_REASONER_HARD ?? "1") !== "0",
+    // Chapters translated in parallel. Clamped to a sane range to avoid rate-limit storms.
+    concurrency: Math.min(8, Math.max(1, Number(process.env.TRANSLATION_CONCURRENCY) || 4)),
   };
 }
 

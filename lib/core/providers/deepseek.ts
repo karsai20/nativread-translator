@@ -12,15 +12,28 @@ import type {
   TranslateChunkInput,
   TranslateChunkOutput,
   RefineChunkInput,
+  EstimateChunkInput,
+  EstimateChunkOutput,
 } from "../translator";
 import { formatForPrompt } from "../glossary";
 import { PLACEHOLDER_OPEN, PLACEHOLDER_CLOSE, BLOCK_MARKER_OPEN, BLOCK_MARKER_CLOSE } from "../markup";
 
 const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
-const DEEPSEEK_MODEL = "deepseek-chat";
+// Pin the concrete model: the `deepseek-chat` alias is deprecated on 2026-07-24.
+// deepseek-v4-flash is its non-thinking successor (cheapest frontier-class tier).
+const DEEPSEEK_MODEL = "deepseek-v4-flash";
+// Thinking mode of the same family, used to refine only the hardest passages.
+const DEEPSEEK_REASONER_MODEL = "deepseek-reasoner";
 const MAX_OUTPUT_TOKENS = 8192;
 // DeepSeek's own recommendation for translation / creative writing.
 const TEMPERATURE = 1.3;
+// The quality gate returns a single digit, so cap output hard and grade deterministically.
+const ESTIMATE_MAX_TOKENS = 8;
+const ESTIMATE_TEMPERATURE = 0;
+// Drafts scoring at or below this (1–5) get the refine pass; 4–5 are kept as-is.
+const REFINE_SCORE_THRESHOLD = 3;
+// The weakest drafts (score at or below this) are refined on the reasoning model.
+const HARD_SCORE_THRESHOLD = 2;
 
 export interface DeepSeekOptions {
   apiKey: string;
@@ -38,7 +51,16 @@ const PRESERVE_RULES = [
   `  add one. Each block marker must appear once, before the paragraph it introduces.`,
 ];
 
-function literarySystemPrompt(targetLang: string, glossary: string, prev?: string): string {
+// IMPORTANT: keep these system prompts byte-identical across every chunk of a book so
+// DeepSeek serves them from its context cache (cache-hit input is ~50x cheaper than a
+// miss, and a cached prefix also lowers latency). That means NO per-chunk content here:
+// the rolling continuity tail lives in the user message instead (see withContext). The
+// glossary is stable for a whole book, so it stays in the cached prefix.
+const CONTEXT_INSTRUCTION =
+  `- If the user message starts with a "PRECEDING CONTEXT" block, use it ONLY to keep ` +
+  `voice, register, and formality continuous. Never translate, repeat, or output it.`;
+
+function literarySystemPrompt(targetLang: string, glossary: string): string {
   return [
     `You are an award-winning literary translator translating a book into ${targetLang}.`,
     ``,
@@ -52,16 +74,16 @@ function literarySystemPrompt(targetLang: string, glossary: string, prev?: strin
     `  consistent register.`,
     `- Keep paragraph structure: one source paragraph -> one translated paragraph.`,
     ...PRESERVE_RULES,
+    CONTEXT_INSTRUCTION,
     `- Output ONLY the translation (with the markers/tokens). No notes, no commentary,`,
     `  no quotes around it.`,
-    prev ? `\nThe immediately preceding translated text (continue seamlessly in the same\nvoice and register; do NOT re-translate it):\n"""${prev}"""` : ``,
     glossary ? `\n${glossary}` : ``,
   ]
     .filter((l) => l !== ``)
     .join("\n");
 }
 
-function refineSystemPrompt(targetLang: string, glossary: string, prev?: string): string {
+function refineSystemPrompt(targetLang: string, glossary: string): string {
   return [
     `You are a meticulous ${targetLang} literary editor. You are given an ${targetLang}`,
     `draft translation. Improve it so it reads as polished, natural, fluent ${targetLang}`,
@@ -70,8 +92,32 @@ function refineSystemPrompt(targetLang: string, glossary: string, prev?: string)
     `- Smooth rhythm and flow; make dialogue sound like real spoken ${targetLang}.`,
     `- Keep meaning, tone, register, and formality consistent.`,
     ...PRESERVE_RULES,
+    CONTEXT_INSTRUCTION,
     `- Output ONLY the improved ${targetLang} text (with the same markers/tokens).`,
-    prev ? `\nPreceding translated text for continuity:\n"""${prev}"""` : ``,
+    glossary ? `\n${glossary}` : ``,
+  ]
+    .filter((l) => l !== ``)
+    .join("\n");
+}
+
+/** Prepend the rolling continuity tail (the only per-chunk content) to the user text. */
+function withContext(text: string, prev?: string): string {
+  if (!prev) return text;
+  return `PRECEDING CONTEXT (for continuity only, do not translate):\n"""${prev}"""\n\nTEXT TO TRANSLATE:\n${text}`;
+}
+
+function estimateSystemPrompt(targetLang: string, glossary: string): string {
+  return [
+    `You are a strict literary translation quality grader for ${targetLang}.`,
+    `You are given a SOURCE passage and a DRAFT ${targetLang} translation.`,
+    `Rate the DRAFT's quality as a single integer from 1 to 5:`,
+    `  5 = publishable literary ${targetLang}, idiomatic and accurate, needs no edits.`,
+    `  4 = good, only trivial nits.`,
+    `  3 = noticeable awkwardness, calques, or minor inaccuracy — worth an editing pass.`,
+    `  2 = clumsy or partly literal; clearly needs revision.`,
+    `  1 = inaccurate, broken, or contains untranslated/garbled text.`,
+    `Judge fluency, naturalness, accuracy, and consistency with the glossary.`,
+    `Reply with ONLY the single digit (1–5). No words, no punctuation.`,
     glossary ? `\n${glossary}` : ``,
   ]
     .filter((l) => l !== ``)
@@ -91,14 +137,18 @@ export class DeepSeekTranslator implements Translator {
     this.baseUrl = opts.baseUrl ?? DEEPSEEK_URL;
   }
 
-  private async chat(system: string, user: string): Promise<TranslateChunkOutput> {
+  private async chat(
+    system: string,
+    user: string,
+    opts: { temperature?: number; maxTokens?: number; model?: string } = {},
+  ): Promise<TranslateChunkOutput> {
     const res = await fetch(this.baseUrl, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
       body: JSON.stringify({
-        model: this.model,
-        temperature: TEMPERATURE,
-        max_tokens: MAX_OUTPUT_TOKENS,
+        model: opts.model ?? this.model,
+        temperature: opts.temperature ?? TEMPERATURE,
+        max_tokens: opts.maxTokens ?? MAX_OUTPUT_TOKENS,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
@@ -113,25 +163,50 @@ export class DeepSeekTranslator implements Translator {
 
     const json = (await res.json()) as {
       choices?: { message?: { content?: string } }[];
-      usage?: { prompt_tokens?: number; completion_tokens?: number };
+      usage?: {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        // DeepSeek reports how much of prompt_tokens was a cache hit (billed cheaper).
+        prompt_cache_hit_tokens?: number;
+      };
     };
     const text = json.choices?.[0]?.message?.content;
     if (typeof text !== "string") throw new Error("DeepSeek response missing message content.");
 
     return {
       text,
-      usage: { inputTokens: json.usage?.prompt_tokens ?? 0, outputTokens: json.usage?.completion_tokens ?? 0 },
+      usage: {
+        inputTokens: json.usage?.prompt_tokens ?? 0,
+        outputTokens: json.usage?.completion_tokens ?? 0,
+        cachedInputTokens: json.usage?.prompt_cache_hit_tokens ?? 0,
+      },
     };
   }
 
   translateChunk(input: TranslateChunkInput): Promise<TranslateChunkOutput> {
-    const system = literarySystemPrompt(input.targetLang, formatForPrompt(input.glossary), input.previousContext);
-    return this.chat(system, input.text);
+    const system = literarySystemPrompt(input.targetLang, formatForPrompt(input.glossary));
+    return this.chat(system, withContext(input.text, input.previousContext));
   }
 
   refineChunk(input: RefineChunkInput): Promise<TranslateChunkOutput> {
-    const system = refineSystemPrompt(input.targetLang, formatForPrompt(input.glossary), input.previousContext);
-    const user = `Source (for reference only):\n${input.source}\n\nDraft to improve:\n${input.draft}`;
-    return this.chat(system, user);
+    const system = refineSystemPrompt(input.targetLang, formatForPrompt(input.glossary));
+    const body = `Source (for reference only):\n${input.source}\n\nDraft to improve:\n${input.draft}`;
+    // The hardest passages get the reasoning model; everything else stays on flash.
+    return this.chat(system, withContext(body, input.previousContext), input.deep ? { model: DEEPSEEK_REASONER_MODEL } : {});
+  }
+
+  async estimateChunk(input: EstimateChunkInput): Promise<EstimateChunkOutput> {
+    const system = estimateSystemPrompt(input.targetLang, formatForPrompt(input.glossary));
+    const user = `SOURCE:\n${input.source}\n\nDRAFT:\n${input.draft}`;
+    const out = await this.chat(system, user, {
+      temperature: ESTIMATE_TEMPERATURE,
+      maxTokens: ESTIMATE_MAX_TOKENS,
+    });
+    const digit = out.text.match(/[1-5]/)?.[0];
+    const score = digit ? Number(digit) : undefined;
+    // No parseable score -> refine (conservative: don't drop polish on a parse hiccup).
+    const needsRefine = score === undefined ? true : score <= REFINE_SCORE_THRESHOLD;
+    const hard = score !== undefined && score <= HARD_SCORE_THRESHOLD;
+    return { needsRefine, hard, score, usage: out.usage };
   }
 }

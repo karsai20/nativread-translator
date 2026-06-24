@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseEpub } from "@/lib/core/epub";
+import { createCostState } from "@/lib/core/cost";
 import { hashSource, findBySourceHash } from "@/lib/core/library";
 import { loadConfig } from "@/lib/server/config";
 import { jobDirFor, cacheState } from "@/lib/server/jobs";
@@ -54,7 +55,7 @@ export async function POST(req: Request): Promise<Response> {
     words: 0,
     spineItemCount,
     chunks: { total: 0, done: 0 },
-    cost: { inputTokens: 0, outputTokens: 0, usd: 0, ceilingUsd: config.costCeilingUsd },
+    cost: createCostState(config.costCeilingUsd),
     createdAt: new Date().toISOString(),
   });
 

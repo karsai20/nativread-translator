@@ -66,6 +66,9 @@ export function startJob(config: ServerConfig, id: string): void {
     jobDir,
     ceilingUsd: config.costCeilingUsd,
     refine: config.refine,
+    selectiveRefine: config.refineSelective,
+    reasonerForHard: config.reasonerForHard,
+    concurrency: config.concurrency,
     libraryDir: config.libraryDir,
     onProgress: cacheState,
     shouldStop: () => controls.get(id), // peek; cleared in finally

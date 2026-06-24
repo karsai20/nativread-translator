@@ -9,6 +9,8 @@ import type {
   TranslateChunkInput,
   TranslateChunkOutput,
   RefineChunkInput,
+  EstimateChunkInput,
+  EstimateChunkOutput,
 } from "../translator";
 import { PLACEHOLDER_OPEN, PLACEHOLDER_CLOSE, BLOCK_MARKER_OPEN, BLOCK_MARKER_CLOSE } from "../markup";
 import { estimateTokens } from "../cost";
@@ -52,6 +54,16 @@ export class FakeTranslator implements Translator {
     return {
       text: out,
       usage: { inputTokens: estimateTokens(input.draft), outputTokens: estimateTokens(out) },
+    };
+  }
+
+  async estimateChunk(input: EstimateChunkInput): Promise<EstimateChunkOutput> {
+    // The fake judges its own deterministic output as publishable, so selective
+    // refinement skips the polish pass (the real provider grades for real).
+    return {
+      needsRefine: false,
+      score: 5,
+      usage: { inputTokens: estimateTokens(input.draft), outputTokens: 1 },
     };
   }
 }
