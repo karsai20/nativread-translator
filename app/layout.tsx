@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Fraunces, Inter } from "next/font/google";
-import { Backdrop } from "@/components/app/Backdrop";
+import { ThemeProvider } from "@/components/shell/ThemeToggle";
+import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
 // Characterful high-contrast serif for display + a clean grotesk for UI. latin-ext
@@ -18,8 +19,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Verzió — könyvfordító",
-  description: "Tölts fel egy könyvet, és olvasd tovább magyarul. Helyi, házi fordítóműhely.",
+  title: "Verzió — fordítóműhely",
+  description: "Helyi könyvfordító műhely. Tölts fel egy könyvet, és kövesd a fordítás állapotát.",
 };
 
 // Set the theme class before paint so there is no light/dark flash. Default: dark.
@@ -32,8 +33,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <script dangerouslySetInnerHTML={{ __html: noFlash }} />
       </head>
       <body>
-        <Backdrop />
-        {children}
+        <ThemeProvider>
+          {children}
+          <Toaster />
+        </ThemeProvider>
       </body>
     </html>
   );

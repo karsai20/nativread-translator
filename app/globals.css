@@ -4,14 +4,15 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* Editorial "book room" aesthetic — warm paper + ember rust, intentional, not a
-   default template. Light is cream; dark is deep warm charcoal with an ember glow. */
+   default template. Light is cream; dark is deep warm charcoal with an ember glow.
+   The dashboard keeps this palette but drops the ambient animation. */
 @theme {
   --color-background: oklch(98.5% 0.008 85);
   --color-foreground: oklch(24% 0.02 60);
 
   --color-card: oklch(100% 0 0);
   --color-card-foreground: oklch(24% 0.02 60);
-  /* Slightly raised surface for tiles / app bar. */
+  /* Slightly raised surface for tiles / bars. */
   --color-surface: oklch(99.5% 0.006 85);
 
   --color-primary: oklch(52% 0.16 28);
@@ -27,13 +28,26 @@
   --color-ring: oklch(52% 0.16 28);
 
   --color-good: oklch(58% 0.13 150);
+  --color-warning: oklch(70% 0.13 70);
   --color-destructive: oklch(55% 0.2 28);
+  --color-destructive-foreground: oklch(98.5% 0.008 85);
+
+  /* Overlay + form tokens used by the dialog/dropdown/input primitives. */
+  --color-popover: var(--color-card);
+  --color-popover-foreground: var(--color-card-foreground);
+  --color-input: var(--color-border);
+
+  /* Sidebar: a hair off the page so the rail reads as a distinct surface. */
+  --color-sidebar: oklch(97% 0.01 82);
+  --color-sidebar-foreground: oklch(34% 0.02 60);
+  --color-sidebar-border: oklch(89% 0.014 70);
+  --color-sidebar-accent: oklch(94% 0.03 45);
 
   --font-display: var(--font-fraunces), "Iowan Old Style", Georgia, serif;
   --font-serif: var(--font-fraunces), "Iowan Old Style", Georgia, serif;
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
 
-  --radius: 0.85rem;
+  --radius: 0.7rem;
 }
 
 /* ---- Dark: deep warm charcoal, brighter ember accent that glows on dark ---- */
@@ -58,7 +72,14 @@
   --color-ring: oklch(67% 0.16 38);
 
   --color-good: oklch(70% 0.15 155);
+  --color-warning: oklch(78% 0.13 72);
   --color-destructive: oklch(64% 0.18 28);
+  --color-destructive-foreground: oklch(96% 0.01 85);
+
+  --color-sidebar: oklch(19.5% 0.013 52);
+  --color-sidebar-foreground: oklch(80% 0.015 80);
+  --color-sidebar-border: oklch(29% 0.012 55);
+  --color-sidebar-accent: oklch(30% 0.05 38);
 }
 
 * {
@@ -80,125 +101,7 @@ body {
   min-height: 100vh;
 }
 
-/* Living atmosphere: a slowly drifting ember field + a cursor-following glow + a
-   whisper of grain. Fixed, behind everything, never affects layout. All motion is
-   transform/opacity (compositor-friendly); JS only sets --mx/--my for the glow. */
-.backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  overflow: hidden;
-  --mx: 50%;
-  --my: 0%;
-}
-
-/* Two big radials that breathe and drift at different speeds. */
-.backdrop-mesh::before,
-.backdrop-mesh::after {
-  content: "";
-  position: absolute;
-  inset: -25%;
-  will-change: transform;
-}
-.backdrop-mesh::before {
-  background: radial-gradient(
-    42% 42% at 50% 8%,
-    color-mix(in oklch, var(--color-primary) 20%, transparent),
-    transparent 66%
-  );
-  animation: drift-a 22s ease-in-out infinite;
-}
-.backdrop-mesh::after {
-  background: radial-gradient(
-    40% 40% at 84% 4%,
-    color-mix(in oklch, var(--color-accent) 55%, transparent),
-    transparent 70%
-  );
-  animation: drift-b 30s ease-in-out infinite;
-}
-.dark .backdrop-mesh::before {
-  background: radial-gradient(
-    46% 46% at 50% 6%,
-    color-mix(in oklch, var(--color-primary) 30%, transparent),
-    transparent 62%
-  );
-}
-.dark .backdrop-mesh::after {
-  background: radial-gradient(
-    44% 44% at 82% 2%,
-    color-mix(in oklch, var(--color-accent) 75%, transparent),
-    transparent 68%
-  );
-}
-
-/* Soft light that eases toward the pointer. */
-.backdrop-glow {
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(
-    34% 34% at var(--mx) var(--my),
-    color-mix(in oklch, var(--color-primary) 12%, transparent),
-    transparent 72%
-  );
-  transition: background 0.5s ease-out;
-  opacity: 0.7;
-}
-.dark .backdrop-glow {
-  background: radial-gradient(
-    36% 36% at var(--mx) var(--my),
-    color-mix(in oklch, var(--color-primary) 20%, transparent),
-    transparent 70%
-  );
-  opacity: 1;
-}
-
-/* Whisper of grain for paper/print texture. */
-.backdrop-grain {
-  position: absolute;
-  inset: 0;
-  opacity: 0.035;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-.dark .backdrop-grain {
-  opacity: 0.05;
-}
-
-@keyframes drift-a {
-  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
-  50% { transform: translate3d(3%, 2.5%, 0) scale(1.08); }
-}
-@keyframes drift-b {
-  0%, 100% { transform: translate3d(0, 0, 0) scale(1.04); }
-  50% { transform: translate3d(-3.5%, 3%, 0) scale(1); }
-}
-
-/* Elevated glass surface for tiles / bars. */
-.surface {
-  background: color-mix(in oklch, var(--color-surface) 86%, transparent);
-  border: 1px solid var(--color-border);
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
-}
-
-/* Staged entrance for dashboard tiles / sections. */
-@keyframes rise {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: none; }
-}
-.rise {
-  animation: rise 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-good) 55%, transparent); }
-  50% { opacity: 0.85; box-shadow: 0 0 0 4px transparent; }
-}
-.live-dot {
-  animation: pulse-dot 2s ease-in-out infinite;
-}
-
-/* ---- Editorial helpers ---- */
+/* ---- Editorial helpers (kept) ---- */
 ::selection {
   background: color-mix(in oklch, var(--color-primary) 30%, transparent);
 }
@@ -213,16 +116,6 @@ body {
 .rule {
   height: 1px;
   background: linear-gradient(90deg, var(--color-border), transparent);
-}
-
-/* Translation morph: the English line blurs/fades out while the Hungarian writes in. */
-.morph {
-  transition: opacity 0.6s ease, filter 0.6s ease, transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-}
-.morph-hidden {
-  opacity: 0;
-  filter: blur(7px);
-  transform: translateY(6px);
 }
 
 /* Reader prose: serif, generous measure, original shown muted beneath each block. */
@@ -258,9 +151,5 @@ body {
   * {
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
-  }
-  .rise,
-  .live-dot {
-    animation: none !important;
   }
 }

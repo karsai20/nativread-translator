@@ -27,7 +27,7 @@ import {
 } from "./cost";
 import { saveToLibrary, hashSource } from "./library";
 
-export type JobStatus = "pending" | "running" | "done" | "error";
+export type JobStatus = "pending" | "running" | "done" | "error" | "paused" | "cancelled";
 
 export interface JobState {
   id: string;
@@ -39,6 +39,13 @@ export interface JobState {
   chunks: { total: number; done: number };
   cost: CostState;
   error?: string;
+  /** ISO timestamps. Optional so manifests written before this feature still parse. */
+  createdAt?: string;
+  updatedAt?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  /** Durations (ms) of the most recent translated chunks, newest last, capped. */
+  chunkDurationsMs?: number[];
 }
 
 interface ChunkResult {
@@ -50,6 +57,8 @@ interface ChunkResult {
 
 const DEFAULT_CEILING_USD = 10;
 const CONTEXT_TAIL_CHARS = 600;
+/** How many recent chunk durations to keep for a responsive ETA. */
+const TIMING_WINDOW = 20;
 
 export interface RunJobOptions {
   id: string;
@@ -62,6 +71,12 @@ export interface RunJobOptions {
   /** If set, the finished book is saved into this household library dir. */
   libraryDir?: string;
   onProgress?: (state: JobState) => void;
+  /**
+   * Polled once per chunk between chunks for a cooperative stop. Returning a signal
+   * exits the loop without throwing and without deleting cached chunks, so a paused
+   * job resumes (re-run) for free.
+   */
+  shouldStop?: () => "pause" | "cancel" | undefined;
 }
 
 function chunkFilePath(jobDir: string, key: string): string {
@@ -76,6 +91,34 @@ function writeManifest(jobDir: string, state: JobState): void {
 export function readManifest(jobDir: string): JobState | undefined {
   const p = manifestPath(jobDir);
   return existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as JobState) : undefined;
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+/** Stamp updatedAt, persist to disk, and notify — so memory and manifest stay in sync. */
+function persist(jobDir: string, state: JobState, onProgress?: (s: JobState) => void): JobState {
+  const stamped: JobState = { ...state, updatedAt: nowIso() };
+  writeManifest(jobDir, stamped);
+  onProgress?.(stamped);
+  return stamped;
+}
+
+const ENDED_STATUSES: ReadonlySet<JobStatus> = new Set(["done", "error", "cancelled"]);
+
+/** Force a job's status on disk (for control actions on a job that is not running). */
+export function setManifestStatus(jobDir: string, status: JobStatus): JobState | undefined {
+  const current = readManifest(jobDir);
+  if (!current) return undefined;
+  const next: JobState = {
+    ...current,
+    status,
+    updatedAt: nowIso(),
+    ...(ENDED_STATUSES.has(status) ? { finishedAt: nowIso() } : {}),
+  };
+  writeManifest(jobDir, next);
+  return next;
 }
 function loadChunkResult(jobDir: string, key: string): ChunkResult | undefined {
   const p = chunkFilePath(jobDir, key);
@@ -130,6 +173,9 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
 
   const doneAtStart = allChunks.filter((c) => existsSync(chunkFilePath(jobDir, c.key))).length;
 
+  // Carry forward identity/cost/timing from a prior run so a resume is cumulative.
+  const prior = readManifest(jobDir);
+
   let state: JobState = {
     id,
     status: "running",
@@ -138,16 +184,31 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     words: countWords(epub),
     spineItemCount: epub.spine.length,
     chunks: { total: allChunks.length, done: doneAtStart },
-    cost: createCostState(ceilingUsd),
+    cost: prior?.cost ? { ...prior.cost, ceilingUsd } : createCostState(ceilingUsd),
+    createdAt: prior?.createdAt ?? nowIso(),
+    startedAt: prior?.startedAt ?? nowIso(),
+    chunkDurationsMs: prior?.chunkDurationsMs ?? [],
   };
-  writeManifest(jobDir, state);
-  onProgress?.(state);
+  state = persist(jobDir, state, onProgress);
 
   const results = new Map<string, ChunkResult>();
   let prevTail = "";
 
   try {
     for (const chunk of allChunks) {
+      // Cooperative stop point: a paused job keeps its chunk cache (resumes for free),
+      // a cancelled job ends. Neither throws.
+      const signal = opts.shouldStop?.();
+      if (signal) {
+        const status: JobStatus = signal === "pause" ? "paused" : "cancelled";
+        state = {
+          ...state,
+          status,
+          ...(status === "cancelled" ? { finishedAt: nowIso() } : {}),
+        };
+        return persist(jobDir, state, onProgress);
+      }
+
       const cached = loadChunkResult(jobDir, chunk.key);
       if (cached) {
         results.set(chunk.key, cached);
@@ -160,11 +221,13 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
         throw new CostCeilingError(state.cost);
       }
 
+      const startedMs = Date.now();
       const { blocks, usage, plainText } = await translateBlocks(provider, chunk.blocks, {
         glossary,
         previousContext: prevTail || undefined,
         refine: opts.refine,
       });
+      const durationMs = Date.now() - startedMs;
 
       const result: ChunkResult = { key: chunk.key, blocks, plainText };
       saveChunkResult(jobDir, result);
@@ -175,9 +238,9 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
         ...state,
         chunks: { ...state.chunks, done: state.chunks.done + 1 },
         cost: addUsage(state.cost, usage),
+        chunkDurationsMs: [...(state.chunkDurationsMs ?? []), durationMs].slice(-TIMING_WINDOW),
       };
-      writeManifest(jobDir, state);
-      onProgress?.(state);
+      state = persist(jobDir, state, onProgress);
     }
 
     // Re-stitch translated inner HTML back into each spine item's blocks.
@@ -213,14 +276,16 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
       });
     }
 
-    state = { ...state, status: "done" };
-    writeManifest(jobDir, state);
-    onProgress?.(state);
-    return state;
+    state = { ...state, status: "done", finishedAt: nowIso() };
+    return persist(jobDir, state, onProgress);
   } catch (err) {
-    state = { ...state, status: "error", error: err instanceof Error ? err.message : String(err) };
-    writeManifest(jobDir, state);
-    onProgress?.(state);
+    state = {
+      ...state,
+      status: "error",
+      error: err instanceof Error ? err.message : String(err),
+      finishedAt: nowIso(),
+    };
+    persist(jobDir, state, onProgress);
     throw err;
   }
 }

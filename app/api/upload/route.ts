@@ -55,6 +55,7 @@ export async function POST(req: Request): Promise<Response> {
     spineItemCount,
     chunks: { total: 0, done: 0 },
     cost: { inputTokens: 0, outputTokens: 0, usd: 0, ceilingUsd: config.costCeilingUsd },
+    createdAt: new Date().toISOString(),
   });
 
   return Response.json({ id, title, spineItemCount, provider: config.providerName });

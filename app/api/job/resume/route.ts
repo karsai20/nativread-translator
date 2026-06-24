@@ -7,13 +7,13 @@ import { jobDirFor, startJob, isValidJobId } from "@/lib/server/jobs";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// Resume = re-run. The chunk cache makes already-translated chunks free, so this also
+// serves as the "start" trigger; it is idempotent while a job is running.
 export async function POST(req: Request): Promise<Response> {
   const config = loadConfig();
   const { id } = (await req.json().catch(() => ({}))) as { id?: string };
   if (!id || !isValidJobId(id)) return Response.json({ error: "Hiányzik vagy érvénytelen a job azonosító." }, { status: 400 });
-
-  const jobDir = jobDirFor(config, id);
-  if (!existsSync(join(jobDir, "source.epub"))) {
+  if (!existsSync(join(jobDirFor(config, id), "source.epub"))) {
     return Response.json({ error: "Ismeretlen job." }, { status: 404 });
   }
 

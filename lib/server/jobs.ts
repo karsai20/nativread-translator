@@ -2,15 +2,28 @@
 // process, backed by on-disk job state (so /status works and resume is possible).
 
 import { join } from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 
-import { runJob, readManifest, type JobState } from "@/lib/core/job";
+import { runJob, readManifest, setManifestStatus, type JobState } from "@/lib/core/job";
 import { createProvider, type ServerConfig } from "./config";
+
+type ControlSignal = "pause" | "cancel";
 
 const states = new Map<string, JobState>();
 const running = new Set<string>();
+const controls = new Map<string, ControlSignal>();
+
+// Job ids are opaque UUIDs (crypto.randomUUID at upload). Anything else is rejected
+// before it can reach a filesystem path — a malicious id like "../../etc" must never
+// escape jobsDir/libraryDir, especially for the destructive rmSync in deleteJob.
+const JOB_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function isValidJobId(id: string): boolean {
+  return JOB_ID_RE.test(id);
+}
 
 export function jobDirFor(config: ServerConfig, id: string): string {
+  if (!isValidJobId(id)) throw new Error(`Invalid job id: ${id}`);
   return join(config.jobsDir, id);
 }
 
@@ -26,10 +39,21 @@ export function isRunning(id: string): boolean {
   return running.has(id);
 }
 
+/** Every job on disk, freshest state first (in-memory wins over the last flush). */
+export function listJobs(config: ServerConfig): JobState[] {
+  if (!existsSync(config.jobsDir)) return [];
+  return readdirSync(config.jobsDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => states.get(e.name) ?? readManifest(jobDirFor(config, e.name)))
+    .filter((s): s is JobState => Boolean(s))
+    .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+}
+
 /** Start (or resume) a translation job in the background. Idempotent while running. */
 export function startJob(config: ServerConfig, id: string): void {
   if (running.has(id)) return;
 
+  controls.delete(id); // a fresh start/resume clears any stale signal
   const jobDir = jobDirFor(config, id);
   const epubBytes = new Uint8Array(readFileSync(join(jobDir, "source.epub")));
   const provider = createProvider(config);
@@ -44,9 +68,48 @@ export function startJob(config: ServerConfig, id: string): void {
     refine: config.refine,
     libraryDir: config.libraryDir,
     onProgress: cacheState,
+    shouldStop: () => controls.get(id), // peek; cleared in finally
   })
     .catch((err) => {
       console.error(`[job ${id}] failed:`, err instanceof Error ? err.message : err);
     })
-    .finally(() => running.delete(id));
+    .finally(() => {
+      running.delete(id);
+      controls.delete(id);
+    });
+}
+
+/**
+ * Request a cooperative pause. Returns true if a running loop will pick it up; if the
+ * job is idle on disk, its manifest is flipped to paused directly.
+ */
+export function pauseJob(config: ServerConfig, id: string): JobState | undefined {
+  if (running.has(id)) {
+    controls.set(id, "pause");
+    return getState(config, id);
+  }
+  const next = setManifestStatus(jobDirFor(config, id), "paused");
+  if (next) cacheState(next);
+  return next;
+}
+
+/** Request cancellation. A running loop ends at its next chunk; idle jobs flip on disk. */
+export function cancelJob(config: ServerConfig, id: string): JobState | undefined {
+  if (running.has(id)) {
+    controls.set(id, "cancel");
+    return getState(config, id);
+  }
+  const next = setManifestStatus(jobDirFor(config, id), "cancelled");
+  if (next) cacheState(next);
+  return next;
+}
+
+/** Stop the job and remove it from disk and memory. Optionally drop its library copy. */
+export function deleteJob(config: ServerConfig, id: string, withLibrary = false): void {
+  if (!isValidJobId(id)) throw new Error(`Invalid job id: ${id}`);
+  if (running.has(id)) controls.set(id, "cancel");
+  states.delete(id);
+  controls.delete(id);
+  rmSync(jobDirFor(config, id), { recursive: true, force: true });
+  if (withLibrary) rmSync(join(config.libraryDir, id), { recursive: true, force: true });
 }
