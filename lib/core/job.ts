@@ -26,6 +26,7 @@ import {
   type CostState,
 } from "./cost";
 import { saveToLibrary, hashSource } from "./library";
+import type { PrecisionMode } from "./quality/route";
 
 export type JobStatus = "pending" | "running" | "done" | "error" | "paused" | "cancelled";
 
@@ -80,6 +81,8 @@ export interface RunJobOptions {
   selectiveRefine?: boolean;
   /** Refine the hardest chunks on a reasoning model (needs selectiveRefine). */
   reasonerForHard?: boolean;
+  /** Quality mode passed to the per-chunk pipeline. */
+  precision?: PrecisionMode;
   /** Chapters translated in parallel. Defaults to DEFAULT_CONCURRENCY. */
   concurrency?: number;
   /** If set, the finished book is saved into this household library dir. */
@@ -222,6 +225,7 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
   // read-modify-write of `state` between awaits is atomic across workers — no locking.
   let stopSignal: "pause" | "cancel" | undefined;
   let ceilingHit = false;
+  let failedChunks = 0;
 
   const processChunk = async (chunk: Chunk, anchor: string): Promise<ChunkResult | undefined> => {
     const cached = loadChunkResult(jobDir, chunk.key);
@@ -237,13 +241,26 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     }
 
     const startedMs = Date.now();
-    const { blocks, usage, plainText } = await translateBlocks(provider, chunk.blocks, {
-      glossary,
-      previousContext: anchor || undefined,
-      refine: opts.refine,
-      selectiveRefine: opts.selectiveRefine,
-      reasonerForHard: opts.reasonerForHard,
-    });
+    let blocks, usage, plainText;
+    try {
+      const out = await translateBlocks(provider, chunk.blocks, {
+        glossary,
+        previousContext: anchor || undefined,
+        refine: opts.refine,
+        selectiveRefine: opts.selectiveRefine,
+        reasonerForHard: opts.reasonerForHard,
+        precision: opts.precision,
+      });
+      blocks = out.blocks;
+      usage = out.usage;
+      plainText = out.plainText;
+    } catch (err) {
+      // Per-chunk isolation: a chunk that fails after transport retries is left uncached
+      // (so resume retries only it) and never aborts the whole book.
+      failedChunks += 1;
+      console.error(`[job ${id}] chunk ${chunk.key} failed:`, err instanceof Error ? err.message : err);
+      return undefined;
+    }
     const durationMs = Date.now() - startedMs;
 
     const result: ChunkResult = { key: chunk.key, blocks, plainText };
@@ -301,6 +318,17 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     }
     if (ceilingHit) {
       throw new CostCeilingError(state.cost);
+    }
+    if (failedChunks > 0) {
+      // Some chunks could not be translated. The good ones are cached, so a resume
+      // retries only the missing chunks — no whole-book restart, no double payment.
+      state = {
+        ...state,
+        status: "error",
+        error: `${failedChunks} szakasz fordítása nem sikerült. Indítsd újra a folytatáshoz.`,
+        finishedAt: nowIso(),
+      };
+      return persist(jobDir, state, onProgress);
     }
 
     // Re-stitch translated inner HTML back into each spine item's blocks.
