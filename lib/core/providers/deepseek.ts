@@ -17,6 +17,7 @@ import type {
 } from "../translator";
 import { formatForPrompt } from "../glossary";
 import { PLACEHOLDER_OPEN, PLACEHOLDER_CLOSE, BLOCK_MARKER_OPEN, BLOCK_MARKER_CLOSE } from "../markup";
+import { fetchWithRetry } from "./http";
 
 const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
 // Pin the concrete model: the `deepseek-chat` alias is deprecated on 2026-07-24.
@@ -27,8 +28,8 @@ const DEEPSEEK_REASONER_MODEL = "deepseek-reasoner";
 const MAX_OUTPUT_TOKENS = 8192;
 // DeepSeek's own recommendation for translation / creative writing.
 const TEMPERATURE = 1.3;
-// The quality gate returns a single digit, so cap output hard and grade deterministically.
-const ESTIMATE_MAX_TOKENS = 8;
+// The quality gate returns a small JSON verdict, so cap output and grade deterministically.
+const ESTIMATE_MAX_TOKENS = 64;
 const ESTIMATE_TEMPERATURE = 0;
 // Drafts scoring at or below this (1–5) get the refine pass; 4–5 are kept as-is.
 const REFINE_SCORE_THRESHOLD = 3;
@@ -39,6 +40,7 @@ export interface DeepSeekOptions {
   apiKey: string;
   model?: string;
   baseUrl?: string;
+  fetchImpl?: typeof fetch;
 }
 
 const TOKEN_DESC =
@@ -110,14 +112,12 @@ function estimateSystemPrompt(targetLang: string, glossary: string): string {
   return [
     `You are a strict literary translation quality grader for ${targetLang}.`,
     `You are given a SOURCE passage and a DRAFT ${targetLang} translation.`,
-    `Rate the DRAFT's quality as a single integer from 1 to 5:`,
-    `  5 = publishable literary ${targetLang}, idiomatic and accurate, needs no edits.`,
-    `  4 = good, only trivial nits.`,
-    `  3 = noticeable awkwardness, calques, or minor inaccuracy — worth an editing pass.`,
-    `  2 = clumsy or partly literal; clearly needs revision.`,
-    `  1 = inaccurate, broken, or contains untranslated/garbled text.`,
-    `Judge fluency, naturalness, accuracy, and consistency with the glossary.`,
-    `Reply with ONLY the single digit (1–5). No words, no punctuation.`,
+    `Grade the DRAFT and reply with ONLY a JSON object of this exact shape:`,
+    `{"score": <1-5 integer>, "omission": <bool>, "accuracy": <bool>, "fluency": <bool>}`,
+    `score: 5 = publishable, 4 = trivial nits, 3 = worth an edit, 2 = clearly needs revision, 1 = broken.`,
+    `omission: true if any source content is missing/untranslated.`,
+    `accuracy: true if any meaning is wrong or invented.`,
+    `fluency: true if the ${targetLang} reads awkward or unnatural.`,
     glossary ? `\n${glossary}` : ``,
   ]
     .filter((l) => l !== ``)
@@ -129,37 +129,42 @@ export class DeepSeekTranslator implements Translator {
   private readonly apiKey: string;
   private readonly model: string;
   private readonly baseUrl: string;
+  private readonly fetchImpl?: typeof fetch;
 
   constructor(opts: DeepSeekOptions) {
     if (!opts.apiKey) throw new Error("DeepSeekTranslator requires an API key.");
     this.apiKey = opts.apiKey;
     this.model = opts.model ?? DEEPSEEK_MODEL;
     this.baseUrl = opts.baseUrl ?? DEEPSEEK_URL;
+    this.fetchImpl = opts.fetchImpl;
   }
 
   private async chat(
     system: string,
     user: string,
-    opts: { temperature?: number; maxTokens?: number; model?: string } = {},
+    opts: { temperature?: number; maxTokens?: number; model?: string; responseFormat?: "json_object" } = {},
   ): Promise<TranslateChunkOutput> {
-    const res = await fetch(this.baseUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
-      body: JSON.stringify({
-        model: opts.model ?? this.model,
-        temperature: opts.temperature ?? TEMPERATURE,
-        max_tokens: opts.maxTokens ?? MAX_OUTPUT_TOKENS,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      }),
-    });
+    const body: Record<string, unknown> = {
+      model: opts.model ?? this.model,
+      temperature: opts.temperature ?? TEMPERATURE,
+      max_tokens: opts.maxTokens ?? MAX_OUTPUT_TOKENS,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    };
+    if (opts.responseFormat) body.response_format = { type: opts.responseFormat };
 
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(`DeepSeek request failed: ${res.status} ${res.statusText} ${detail.slice(0, 500)}`);
-    }
+    const isReasoner = (opts.model ?? this.model) === DEEPSEEK_REASONER_MODEL;
+    const res = await fetchWithRetry(
+      this.baseUrl,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${this.apiKey}` },
+        body: JSON.stringify(body),
+      },
+      { fetchImpl: this.fetchImpl, timeoutMs: isReasoner ? 300000 : 120000 },
+    );
 
     const json = (await res.json()) as {
       choices?: { message?: { content?: string } }[];
@@ -201,12 +206,32 @@ export class DeepSeekTranslator implements Translator {
     const out = await this.chat(system, user, {
       temperature: ESTIMATE_TEMPERATURE,
       maxTokens: ESTIMATE_MAX_TOKENS,
+      responseFormat: "json_object",
     });
-    const digit = out.text.match(/[1-5]/)?.[0];
-    const score = digit ? Number(digit) : undefined;
-    // No parseable score -> refine (conservative: don't drop polish on a parse hiccup).
-    const needsRefine = score === undefined ? true : score <= REFINE_SCORE_THRESHOLD;
+
+    let score: number | undefined;
+    let omission = false;
+    let accuracy = false;
+    let fluency = false;
+    try {
+      const v = JSON.parse(out.text) as Partial<{
+        score: number;
+        omission: boolean;
+        accuracy: boolean;
+        fluency: boolean;
+      }>;
+      if (typeof v.score === "number") score = Math.max(1, Math.min(5, Math.round(v.score)));
+      omission = Boolean(v.omission);
+      accuracy = Boolean(v.accuracy);
+      fluency = Boolean(v.fluency);
+    } catch {
+      // No parseable score -> refine (conservative: don't drop polish on a parse hiccup).
+      score = undefined;
+    }
+
+    const needsRefine =
+      score === undefined ? true : score <= REFINE_SCORE_THRESHOLD || omission || accuracy;
     const hard = score !== undefined && score <= HARD_SCORE_THRESHOLD;
-    return { needsRefine, hard, score, usage: out.usage };
+    return { needsRefine, hard, score, omission, accuracy, fluency, usage: out.usage };
   }
 }

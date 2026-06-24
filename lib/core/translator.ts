@@ -86,6 +86,12 @@ export interface EstimateChunkOutput {
   hard?: boolean;
   /** 1–5 quality score when the provider produced one (5 = publishable as-is). */
   score?: number;
+  /** Judge flag: source content is missing/untranslated. */
+  omission?: boolean;
+  /** Judge flag: meaning is wrong or invented. */
+  accuracy?: boolean;
+  /** Judge flag: reads awkward/unnatural in the target language. */
+  fluency?: boolean;
   usage?: TokenUsage;
 }
 
