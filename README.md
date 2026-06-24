@@ -67,6 +67,7 @@ Next.js (App Router) · shadcn-style UI · Tailwind v4 · framework-agnostic cor
 | `TRANSLATION_REFINE` | `1` | Second polish pass for quality (`0` to disable). |
 | `TRANSLATION_REFINE_SELECTIVE` | `1` | Refine only chunks a cheap quality estimate judges weak (`0` = refine every chunk). |
 | `TRANSLATION_REASONER_HARD` | `1` | Refine the weakest chunks on `deepseek-reasoner` (`0` to keep flash). |
+| `TRANSLATION_PRECISION` | `balanced` | Quality mode: `balanced`, `fidelity` (stricter on meaning/omission + back-translation), or `natural`. |
 | `TRANSLATION_CONCURRENCY` | `4` | Chapters translated in parallel (1–8). Higher = faster, more API load. |
 
 ## Deploy on Proxmox

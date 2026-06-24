@@ -8,6 +8,7 @@
 import { DeepSeekTranslator } from "@/lib/core/providers/deepseek";
 import { FakeTranslator } from "@/lib/core/providers/fake";
 import type { Translator } from "@/lib/core/translator";
+import type { PrecisionMode } from "@/lib/core/quality/route";
 
 export interface ServerConfig {
   jobsDir: string;
@@ -18,11 +19,15 @@ export interface ServerConfig {
   refine: boolean;
   refineSelective: boolean;
   reasonerForHard: boolean;
+  precision: PrecisionMode;
   concurrency: number;
 }
 
 export function loadConfig(): ServerConfig {
   const apiKey = (process.env.PROVIDER_API_KEY ?? "").trim();
+  const rawPrecision = (process.env.TRANSLATION_PRECISION ?? "balanced").trim();
+  const precision: PrecisionMode =
+    rawPrecision === "fidelity" || rawPrecision === "natural" ? rawPrecision : "balanced";
   return {
     jobsDir: process.env.JOBS_DIR?.trim() || "jobs",
     libraryDir: process.env.LIBRARY_DIR?.trim() || "library",
@@ -36,6 +41,7 @@ export function loadConfig(): ServerConfig {
     refineSelective: (process.env.TRANSLATION_REFINE_SELECTIVE ?? "1") !== "0",
     // Escalate the weakest chunks to the reasoning model (deepseek-reasoner) for refine.
     reasonerForHard: (process.env.TRANSLATION_REASONER_HARD ?? "1") !== "0",
+    precision,
     // Chapters translated in parallel. Clamped to a sane range to avoid rate-limit storms.
     concurrency: Math.min(8, Math.max(1, Number(process.env.TRANSLATION_CONCURRENCY) || 4)),
   };

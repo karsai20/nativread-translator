@@ -68,6 +68,7 @@ export function startJob(config: ServerConfig, id: string): void {
     refine: config.refine,
     selectiveRefine: config.refineSelective,
     reasonerForHard: config.reasonerForHard,
+    precision: config.precision,
     concurrency: config.concurrency,
     libraryDir: config.libraryDir,
     onProgress: cacheState,
