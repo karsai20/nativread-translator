@@ -208,50 +208,38 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
 
   const results = new Map<string, ChunkResult>();
 
-  // Group chunks by chapter (spine item). Within a group we stay sequential so the
-  // continuity tail carries; groups themselves run in parallel across workers.
-  const groups: Chunk[][] = [];
-  const groupIndexByHref = new Map<string, number>();
-  for (const chunk of allChunks) {
-    let gi = groupIndexByHref.get(chunk.itemHref);
-    if (gi === undefined) {
-      gi = groups.length;
-      groupIndexByHref.set(chunk.itemHref, gi);
-      groups.push([]);
-    }
-    groups[gi]!.push(chunk);
-  }
-
-  // Effective parallelism is capped by the number of chapters: a book that is one big
-  // spine item runs sequentially no matter the concurrency setting. Record it so the
-  // ETA divides by real parallelism instead of assuming a single stream.
+  // Parallelism is at the CHUNK level (a flat queue), not the chapter level: a book is
+  // hundreds of independent units regardless of how few spine items it has, so all of
+  // them translate concurrently. The "fixed stuff" is shared read-only by every chunk —
+  // the book-wide glossary (names/terms) plus a single style anchor (the translated tail
+  // of the first chunk) that replaces the old rolling per-seam tail. A constant anchor
+  // also keeps the prompt prefix identical across chunks, so DeepSeek caches it.
   const concurrency = Math.max(1, opts.concurrency ?? DEFAULT_CONCURRENCY);
-  const workerCount = Math.min(concurrency, groups.length || 1);
+  const workerCount = Math.min(concurrency, Math.max(1, allChunks.length));
   state = persist(jobDir, { ...state, concurrency: workerCount }, onProgress);
 
-  // Shared, cooperative loop controls. JS is single-threaded, so the synchronous
+  // Shared, cooperative controls. JS is single-threaded, so the synchronous
   // read-modify-write of `state` between awaits is atomic across workers — no locking.
   let stopSignal: "pause" | "cancel" | undefined;
   let ceilingHit = false;
-  let nextGroup = 0;
 
-  const processChunk = async (chunk: Chunk, prevTail: string): Promise<string> => {
+  const processChunk = async (chunk: Chunk, anchor: string): Promise<ChunkResult | undefined> => {
     const cached = loadChunkResult(jobDir, chunk.key);
     if (cached) {
       results.set(chunk.key, cached);
-      return tail(cached.plainText || prevTail);
+      return cached;
     }
 
     const chunkChars = chunk.blocks.reduce((n, b) => n + b.innerHtml.length, 0);
     if (wouldExceedCeiling(state.cost, estimateTokensFromChars(chunkChars))) {
       ceilingHit = true;
-      return prevTail;
+      return undefined;
     }
 
     const startedMs = Date.now();
     const { blocks, usage, plainText } = await translateBlocks(provider, chunk.blocks, {
       glossary,
-      previousContext: prevTail || undefined,
+      previousContext: anchor || undefined,
       refine: opts.refine,
       selectiveRefine: opts.selectiveRefine,
       reasonerForHard: opts.reasonerForHard,
@@ -270,31 +258,40 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     };
     state = persist(jobDir, state, onProgress);
 
-    return tail(plainText || prevTail);
+    return result;
   };
+
+  let anchor = "";
+  let nextChunk = 1; // worker pool starts after the anchor chunk
 
   const worker = async (): Promise<void> => {
     while (true) {
       if (stopSignal || ceilingHit) return;
-      const gi = nextGroup++;
-      if (gi >= groups.length) return;
-
-      let prevTail = "";
-      for (const chunk of groups[gi]!) {
-        if (stopSignal || ceilingHit) return;
-        // Cooperative stop point, polled once per chunk: a paused job keeps its chunk
-        // cache (resumes for free), a cancelled job ends. Neither throws.
-        const signal = opts.shouldStop?.();
-        if (signal) {
-          stopSignal = signal;
-          return;
-        }
-        prevTail = await processChunk(chunk, prevTail);
+      // Cooperative stop point, polled once per chunk: a paused job keeps its chunk
+      // cache (resumes for free), a cancelled job ends. Neither throws.
+      const signal = opts.shouldStop?.();
+      if (signal) {
+        stopSignal = signal;
+        return;
       }
+      const i = nextChunk++;
+      if (i >= allChunks.length) return;
+      await processChunk(allChunks[i]!, anchor);
     }
   };
 
   try {
+    // Seed the shared style anchor from the first chunk before fanning out, so every
+    // parallel chunk continues the same established voice/register.
+    if (allChunks.length > 0) {
+      const signal = opts.shouldStop?.();
+      if (signal) stopSignal = signal;
+      else {
+        const firstResult = await processChunk(allChunks[0]!, "");
+        if (firstResult) anchor = tail(firstResult.plainText);
+      }
+    }
+
     await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
     if (stopSignal) {
