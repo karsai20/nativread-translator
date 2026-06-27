@@ -1,8 +1,10 @@
 import { test, expect } from "bun:test";
-import { translateBlocks } from "../lib/core/translator.ts";
+import { translateBlocks, TranslationGuardError } from "../lib/core/translator.ts";
 import type { Translator, TranslateChunkInput } from "../lib/core/translator.ts";
 import { FakeTranslator, FAKE_REFINE_TAG } from "../lib/core/providers/fake.ts";
 import { splitBlockSegments, BLOCK_MARKER_OPEN, BLOCK_MARKER_CLOSE } from "../lib/core/markup.ts";
+
+const REFUSAL = "Sorry, I can't generate a translation for this passage.";
 
 const STRIP_MARKERS = new RegExp(`[${BLOCK_MARKER_OPEN}${BLOCK_MARKER_CLOSE}]`, "g");
 
@@ -116,6 +118,38 @@ test("falls back to per-block translation when a block marker goes missing", asy
   expect(calls).toBe(3);
   expect(res.blocks[0]!.html).toContain("<em>");
   expect(res.blocks[1]!.html).toContain('href="x.xhtml"');
+});
+
+test("guard re-translates deterministically when the first draft refuses, then succeeds", async () => {
+  const fake = new FakeTranslator();
+  let detSeen = false;
+  const flakyRefuser: Translator = {
+    name: "flaky-refuser",
+    async translateChunk(input: TranslateChunkInput) {
+      // First (sampled) attempt refuses; the guard's deterministic retry gets a real one.
+      if (input.deterministic) {
+        detSeen = true;
+        return fake.translateChunk(input);
+      }
+      return { text: REFUSAL, usage: { inputTokens: 1, outputTokens: 1 } };
+    },
+  };
+
+  const res = await translateBlocks(flakyRefuser, blocks, { glossary: {} });
+  expect(detSeen).toBe(true);
+  expect(res.blocks[0]!.html).toContain("<em>"); // clean retry output, markup restored
+  expect(res.blocks[1]!.html).toContain('href="x.xhtml"');
+});
+
+test("guard fails the chunk when the model refuses even on the deterministic retry", async () => {
+  const alwaysRefuse: Translator = {
+    name: "always-refuse",
+    async translateChunk() {
+      return { text: REFUSAL, usage: { inputTokens: 1, outputTokens: 1 } };
+    },
+  };
+
+  await expect(translateBlocks(alwaysRefuse, blocks, { glossary: {} })).rejects.toBeInstanceOf(TranslationGuardError);
 });
 
 test("glossary target renderings are applied", async () => {

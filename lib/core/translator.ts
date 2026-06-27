@@ -14,6 +14,9 @@
 //      natural literary Hungarian. Cheap on DeepSeek, a real quality lever.
 //   5. Robust fallback: if the model drops a block marker, re-translate that chunk's
 //      blocks individually so output is never lost.
+//   6. Blocking guard: a draft that REFUSES, leaks chain-of-thought / foreign text, or
+//      left placeholder garbage is re-translated deterministically and, if still bad,
+//      fails the chunk (per-chunk isolation) rather than baking garbage into the book.
 
 import type { GlossaryMap } from "./glossary";
 import {
@@ -27,6 +30,7 @@ import {
 } from "./markup";
 import { validateChunk, type ValidateOptions } from "./quality/validators";
 import { routeDraft, MAX_QUALITY_ITERATIONS, type PrecisionMode } from "./quality/route";
+import { guardChunk, type GuardReason } from "./quality/guard";
 
 const BLOCK_MARKER_RE = new RegExp(`${BLOCK_MARKER_OPEN}\\d*${BLOCK_MARKER_CLOSE}?`, "g");
 
@@ -53,6 +57,11 @@ export interface TranslateChunkInput {
   glossary: GlossaryMap;
   /** Tail of the previously translated text, for seamless continuity. */
   previousContext?: string;
+  /**
+   * Force deterministic decoding (temperature 0). Used by the guard's retry: when a draft
+   * was rejected, a temp-0 re-translation is far less likely to repeat a degenerate result.
+   */
+  deterministic?: boolean;
 }
 
 export interface RefineChunkInput {
@@ -140,6 +149,16 @@ export interface TranslateBlocksOptions {
   precision?: PrecisionMode;
 }
 
+/** Thrown when a chunk's translation fails the blocking guard even after a deterministic retry. */
+export class TranslationGuardError extends Error {
+  readonly reasons: { index: number; reason: GuardReason }[];
+  constructor(reasons: { index: number; reason: GuardReason }[]) {
+    super(`Translation guard rejected chunk: ${reasons.map((r) => `#${r.index}:${r.reason}`).join(", ")}`);
+    this.name = "TranslationGuardError";
+    this.reasons = reasons;
+  }
+}
+
 /** Mode-dependent length-ratio band for the omission check (HU renders near EN length). */
 function lengthBand(mode: PrecisionMode | undefined): ValidateOptions {
   if (mode === "fidelity") return { minLengthRatio: 0.7, maxLengthRatio: 2.0 };
@@ -171,17 +190,38 @@ function toPlainText(html: string): string {
     .trim();
 }
 
+interface Prepared {
+  index: number;
+  originalHtml: string;
+  text: string;
+  tokens: string[];
+}
+
+/** Build the guard's view of a finished chunk: source vs translated plain text per block. */
+function guardBlocks(prepared: Prepared[], out: BlockResult[]) {
+  const byIndex = new Map(out.map((b) => [b.index, b.html]));
+  return prepared
+    .filter((p) => p.text.trim().length > 0)
+    .map((p) => {
+      const html = byIndex.get(p.index) ?? "";
+      return { index: p.index, sourcePlain: toPlainText(p.originalHtml), targetHtml: html, targetPlain: toPlainText(html) };
+    });
+}
+
 /**
  * Translate all blocks of a chunk together, with context. Returns the translated inner
  * HTML per block (originals preserved for non-translatable blocks), summed usage, and a
  * plain-text rendering for continuity carry.
+ *
+ * A draft that fails the blocking guard is re-translated deterministically; if it still
+ * fails, this throws TranslationGuardError so the caller can drop the chunk.
  */
 export async function translateBlocks(
   provider: Translator,
   blocks: BlockInput[],
   opts: TranslateBlocksOptions,
 ): Promise<TranslateBlocksResult> {
-  const prepared = blocks.map((b) => {
+  const prepared: Prepared[] = blocks.map((b) => {
     const { text, tokens } = protect(b.innerHtml);
     return { index: b.index, originalHtml: b.innerHtml, text, tokens };
   });
@@ -197,6 +237,33 @@ export async function translateBlocks(
     };
   }
 
+  // First pass: full pipeline (draft + optional refine).
+  const first = await produceBlocks(provider, prepared, translatable, opts, { deterministic: false, refine: opts.refine });
+  if (guardChunk(guardBlocks(prepared, first.blocks)).ok) return first;
+
+  // Guard rejected the draft. Retry once, deterministically and without the refine pass —
+  // a temp-0 re-translation rarely repeats a refusal / degenerate / foreign result.
+  const retry = await produceBlocks(provider, prepared, translatable, opts, { deterministic: true, refine: false });
+  const report = guardChunk(guardBlocks(prepared, retry.blocks));
+  if (report.ok) return { ...retry, usage: addUsage(first.usage, retry.usage) };
+
+  // Still bad: fail the chunk so per-chunk isolation drops it (no garbage in the book).
+  throw new TranslationGuardError(report.reasons);
+}
+
+interface ProduceControl {
+  deterministic: boolean;
+  refine?: boolean;
+}
+
+/** One full attempt at a chunk: draft, optional refine, split, restore (with marker fallback). */
+async function produceBlocks(
+  provider: Translator,
+  prepared: Prepared[],
+  translatable: Prepared[],
+  opts: TranslateBlocksOptions,
+  ctl: ProduceControl,
+): Promise<TranslateBlocksResult> {
   const payload = translatable.map((p) => `${blockMarker(p.index)}\n${p.text}`).join("\n\n");
 
   let usage = EMPTY_USAGE;
@@ -207,11 +274,12 @@ export async function translateBlocks(
     targetLang: TARGET_LANG,
     glossary: opts.glossary,
     previousContext: opts.previousContext,
+    deterministic: ctl.deterministic,
   });
   usage = addUsage(usage, draft.usage);
 
   let finalText = draft.text;
-  if (opts.refine && provider.refineChunk) {
+  if (ctl.refine && provider.refineChunk) {
     if (!opts.selectiveRefine) {
       // Legacy unconditional refine: one polish pass, no quality gate.
       const refined = await provider.refineChunk({
@@ -286,14 +354,15 @@ export async function translateBlocks(
   }
 
   // Fallback: a marker went missing. Translate each block on its own so nothing is lost.
-  const fallback = await translateBlocksIndividually(provider, prepared, opts);
+  const fallback = await translateBlocksIndividually(provider, prepared, opts, ctl.deterministic);
   return { blocks: fallback.blocks, usage: addUsage(usage, fallback.usage), plainText: fallback.plainText };
 }
 
 async function translateBlocksIndividually(
   provider: Translator,
-  prepared: { index: number; originalHtml: string; text: string; tokens: string[] }[],
+  prepared: Prepared[],
   opts: TranslateBlocksOptions,
+  deterministic: boolean,
 ): Promise<TranslateBlocksResult> {
   let usage = EMPTY_USAGE;
   const out: BlockResult[] = [];
@@ -309,6 +378,7 @@ async function translateBlocksIndividually(
       targetLang: TARGET_LANG,
       glossary: opts.glossary,
       previousContext: opts.previousContext,
+      deterministic,
     });
     usage = addUsage(usage, res.usage);
     // Strip any stray block markers the model may have echoed, then restore tags.

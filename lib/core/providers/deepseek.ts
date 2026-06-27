@@ -26,8 +26,10 @@ const DEEPSEEK_MODEL = "deepseek-v4-flash";
 // Thinking mode of the same family, used to refine only the hardest passages.
 const DEEPSEEK_REASONER_MODEL = "deepseek-reasoner";
 const MAX_OUTPUT_TOKENS = 8192;
-// DeepSeek's own recommendation for translation / creative writing.
-const TEMPERATURE = 1.3;
+// DeepSeek's docs suggest 1.3 for translation, but a real A/B on this book (2026-06-27)
+// showed 1.3 destabilises the model on our marker-bearing payloads: ~37% of passes lost
+// tags and it emitted token-salad / chain-of-thought. 0.5 keeps it literary yet stable.
+const TEMPERATURE = 0.5;
 // The quality gate returns a small JSON verdict, so cap output and grade deterministically.
 const ESTIMATE_MAX_TOKENS = 64;
 const ESTIMATE_TEMPERATURE = 0;
@@ -190,7 +192,9 @@ export class DeepSeekTranslator implements Translator {
 
   translateChunk(input: TranslateChunkInput): Promise<TranslateChunkOutput> {
     const system = literarySystemPrompt(input.targetLang, formatForPrompt(input.glossary));
-    return this.chat(system, withContext(input.text, input.previousContext));
+    // The guard's retry asks for deterministic decoding (temp 0) to break out of a
+    // degenerate/refusing sample that the default temperature produced.
+    return this.chat(system, withContext(input.text, input.previousContext), input.deterministic ? { temperature: 0 } : {});
   }
 
   refineChunk(input: RefineChunkInput): Promise<TranslateChunkOutput> {
