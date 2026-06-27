@@ -1,7 +1,12 @@
 // Inline-tag protection + block-boundary markers.
 //
-// Two separate placeholder schemes, both using Unicode Private Use Area code points so
-// they never collide with real prose and survive translation intact:
+// Two separate placeholder schemes, both using rare, VISIBLE Unicode bracket characters
+// that essentially never occur in prose, so they don't collide with real text yet — and
+// this is the key property — the model reliably echoes them back. An earlier design used
+// invisible Private-Use-Area code points; the model silently dropped those control chars
+// (leaving bare digits like `."1` baked into the text and losing the tag entirely). A
+// real DeepSeek A/B (2026-06-27) showed visible sentinels round-trip ~94% vs ~63% for PUA
+// with zero residual garbage. See docs/.../2026-06-27-output-corruption-diagnosis.md.
 //
 //   1. Inline tokens  — replace inline tags (<em>, <a href>, <br/>, ...) inside a block.
 //   2. Block markers  — separate several blocks (paragraphs) inside ONE translation
@@ -10,13 +15,13 @@
 //
 // Both are string-only (no DOM) so the design ports cleanly to Swift.
 
-// ---- Inline tag tokens ----
-const TOKEN_OPEN = "";
-const TOKEN_CLOSE = "";
+// ---- Inline tag tokens ----  ⟦N⟧  (U+27E6 / U+27E7)
+const TOKEN_OPEN = "⟦";
+const TOKEN_CLOSE = "⟧";
 
-// ---- Block boundary markers (distinct PUA range) ----
-const BLOCK_OPEN = "";
-const BLOCK_CLOSE = "";
+// ---- Block boundary markers (distinct visible brackets) ----  【N】  (U+3010 / U+3011)
+const BLOCK_OPEN = "【";
+const BLOCK_CLOSE = "】";
 
 const INLINE_TAGS = [
   "a", "abbr", "b", "br", "cite", "code", "del", "em", "i", "img", "ins", "mark",
@@ -85,6 +90,11 @@ export function splitBlockSegments(text: string): BlockSegment[] {
     const bodyEnd = i + 1 < hits.length ? hits[i + 1]!.start : text.length;
     return { index: h.index, body: text.slice(h.end, bodyEnd) };
   });
+}
+
+/** True if any inline token or block marker sentinel survived into final output (= corruption). */
+export function hasResidualSentinel(s: string): boolean {
+  return s.includes(TOKEN_OPEN) || s.includes(TOKEN_CLOSE) || s.includes(BLOCK_OPEN) || s.includes(BLOCK_CLOSE);
 }
 
 export const PLACEHOLDER_OPEN = TOKEN_OPEN;
