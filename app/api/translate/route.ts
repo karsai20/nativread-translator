@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: Request): Promise<Response> {
   const config = loadConfig();
-  const { id } = (await req.json().catch(() => ({}))) as { id?: string };
+  const { id, sample } = (await req.json().catch(() => ({}))) as { id?: string; sample?: boolean };
   if (!id || !isValidJobId(id)) return Response.json({ error: "Hiányzik vagy érvénytelen a job azonosító." }, { status: 400 });
 
   const jobDir = jobDirFor(config, id);
@@ -17,6 +17,6 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: "Ismeretlen job." }, { status: 404 });
   }
 
-  startJob(config, id);
+  startJob(config, id, { sample: Boolean(sample) });
   return Response.json({ ok: true });
 }

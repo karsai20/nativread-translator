@@ -13,6 +13,9 @@ const states = new Map<string, JobState>();
 const running = new Set<string>();
 const controls = new Map<string, ControlSignal>();
 
+/** Fraction of a book translated in "sample" (preview) mode. */
+export const SAMPLE_FRACTION = 0.05;
+
 // Job ids are opaque UUIDs (crypto.randomUUID at upload). Anything else is rejected
 // before it can reach a filesystem path — a malicious id like "../../etc" must never
 // escape jobsDir/libraryDir, especially for the destructive rmSync in deleteJob.
@@ -50,13 +53,17 @@ export function listJobs(config: ServerConfig): JobState[] {
 }
 
 /** Start (or resume) a translation job in the background. Idempotent while running. */
-export function startJob(config: ServerConfig, id: string): void {
+export function startJob(config: ServerConfig, id: string, opts: { sample?: boolean } = {}): void {
   if (running.has(id)) return;
 
   controls.delete(id); // a fresh start/resume clears any stale signal
   const jobDir = jobDirFor(config, id);
   const epubBytes = new Uint8Array(readFileSync(join(jobDir, "source.epub")));
   const provider = createProvider(config);
+
+  // Honor a sample request, and keep a previously-started sample a sample on resume (the
+  // resume route doesn't re-send the flag) so it never silently expands to the whole book.
+  const sample = opts.sample || Boolean(readManifest(jobDir)?.sample);
 
   running.add(id);
   void runJob({
@@ -71,6 +78,7 @@ export function startJob(config: ServerConfig, id: string): void {
     precision: config.precision,
     concurrency: config.concurrency,
     libraryDir: config.libraryDir,
+    ...(sample ? { sampleFraction: SAMPLE_FRACTION } : {}),
     onProgress: cacheState,
     shouldStop: () => controls.get(id), // peek; cleared in finally
   })

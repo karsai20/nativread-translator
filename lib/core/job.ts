@@ -49,6 +49,8 @@ export interface JobState {
   chunkDurationsMs?: number[];
   /** Effective parallel worker count, so ETA reflects parallelism (not sequential). */
   concurrency?: number;
+  /** True when only the leading fraction of the book was translated (cheap preview). */
+  sample?: boolean;
 }
 
 interface ChunkResult {
@@ -69,6 +71,25 @@ const TIMING_WINDOW = 20;
  */
 const DEFAULT_CONCURRENCY = 4;
 
+/**
+ * Keep the leading chunks whose cumulative source size covers `fraction` of the book.
+ * Always keeps at least one chunk so a sample is never empty.
+ */
+function takeLeadingFraction(chunks: Chunk[], fraction: number): Chunk[] {
+  const chars = chunks.map((c) => c.blocks.reduce((n, b) => n + b.innerHtml.length, 0));
+  const total = chars.reduce((a, b) => a + b, 0);
+  if (total === 0) return chunks.slice(0, 1);
+  const target = total * fraction;
+  const kept: Chunk[] = [];
+  let acc = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    kept.push(chunks[i]!);
+    acc += chars[i]!;
+    if (acc >= target) break;
+  }
+  return kept;
+}
+
 export interface RunJobOptions {
   id: string;
   epubBytes: Uint8Array;
@@ -83,6 +104,12 @@ export interface RunJobOptions {
   reasonerForHard?: boolean;
   /** Quality mode passed to the per-chunk pipeline. */
   precision?: PrecisionMode;
+  /**
+   * Translate only the leading `sampleFraction` (0–1) of the book — a cheap preview to
+   * judge translation quality before paying for the whole thing. The rest of the book is
+   * left as the original text. Resume-safe: chunk keys are unchanged.
+   */
+  sampleFraction?: number;
   /** Chapters translated in parallel. Defaults to DEFAULT_CONCURRENCY. */
   concurrency?: number;
   /** If set, the finished book is saved into this household library dir. */
@@ -181,12 +208,18 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     string,
     { doc: ReturnType<typeof chunkSpineItem>["doc"]; blockEls: ReturnType<typeof chunkSpineItem>["blockEls"] }
   >();
-  const allChunks: Chunk[] = [];
+  const fullChunks: Chunk[] = [];
   for (const item of epub.spine) {
     const { chunks, doc, blockEls } = chunkSpineItem(item.href, item.content);
     parsedByHref.set(item.href, { doc, blockEls });
-    allChunks.push(...chunks);
+    fullChunks.push(...chunks);
   }
+
+  // Sample mode: translate only the leading fraction; the rest stays original. Chunks not
+  // in scope are simply never translated, so re-stitch leaves their blocks untouched.
+  const sampleFraction = opts.sampleFraction;
+  const isSample = typeof sampleFraction === "number" && sampleFraction > 0 && sampleFraction < 1;
+  const allChunks: Chunk[] = isSample ? takeLeadingFraction(fullChunks, sampleFraction) : fullChunks;
 
   const doneAtStart = allChunks.filter((c) => existsSync(chunkFilePath(jobDir, c.key))).length;
 
@@ -206,6 +239,7 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     createdAt: prior?.createdAt ?? nowIso(),
     startedAt: prior?.startedAt ?? nowIso(),
     chunkDurationsMs: prior?.chunkDurationsMs ?? [],
+    ...(isSample ? { sample: true } : {}),
   };
   state = persist(jobDir, state, onProgress);
 
@@ -351,8 +385,9 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     const outBytes = writeEpub(epub, translatedByHref);
     writeFileSync(join(jobDir, "output.epub"), outBytes);
 
-    // Persist into the household library so it is not re-translated.
-    if (opts.libraryDir) {
+    // Persist into the household library so it is not re-translated. A sample is a partial
+    // preview, not the finished book, so it must never satisfy a later full-book request.
+    if (opts.libraryDir && !isSample) {
       saveToLibrary({
         libraryDir: opts.libraryDir,
         id,

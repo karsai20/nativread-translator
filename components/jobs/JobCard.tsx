@@ -44,6 +44,11 @@ export function JobCard({ job, onPause, onResume, onCancel, onDelete }: JobCardP
           </h3>
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <StatusBadge status={job.status} />
+            {job.sample && (
+              <span className="rounded-full bg-accent px-2 py-0.5 font-medium text-accent-foreground" title="Csak az első 5% lett lefordítva">
+                Próba · 5%
+              </span>
+            )}
             <span className="capitalize">{job.provider}</span>
             {updated && <span>· frissítve {updated}</span>}
           </div>

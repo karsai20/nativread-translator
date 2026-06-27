@@ -27,11 +27,13 @@ export function UploadDialog({ onStarted }: UploadDialogProps) {
   const [file, setFile] = React.useState<File | null>(null);
   const [drag, setDrag] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const [sample, setSample] = React.useState(false);
 
   const reset = () => {
     setFile(null);
     setDrag(false);
     setBusy(false);
+    setSample(false);
   };
 
   const start = async () => {
@@ -53,11 +55,11 @@ export function UploadDialog({ onStarted }: UploadDialogProps) {
       const tr = await fetch("/api/translate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: uj.id }),
+        body: JSON.stringify({ id: uj.id, sample }),
       });
       if (!tr.ok) throw new Error(((await tr.json()) as { error?: string }).error ?? "A fordítás nem indult el.");
 
-      toast.success("A fordítás elindult.");
+      toast.success(sample ? "A próbafordítás (első 5%) elindult." : "A fordítás elindult.");
       setOpen(false);
       reset();
       onStarted?.();
@@ -135,13 +137,40 @@ export function UploadDialog({ onStarted }: UploadDialogProps) {
           </span>
         </label>
 
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={sample}
+          onClick={() => setSample((s) => !s)}
+          disabled={busy}
+          className={cn(
+            "flex w-full items-start gap-3 rounded-[var(--radius)] border border-border bg-surface px-4 py-3 text-left transition-colors hover:border-primary disabled:opacity-60",
+            sample && "border-primary bg-accent/40",
+          )}
+        >
+          <span
+            className={cn(
+              "mt-0.5 grid size-5 shrink-0 place-items-center rounded-[6px] border border-border text-primary-foreground transition-colors",
+              sample ? "border-primary bg-primary" : "bg-surface",
+            )}
+          >
+            {sample ? <span className="text-xs leading-none">✓</span> : null}
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-medium">Csak az első 5% (próbafordítás)</span>
+            <span className="block text-sm text-muted-foreground">
+              Olcsó minta a minőség ellenőrzéséhez, mielőtt az egész könyvet lefordítanád. A többi rész eredeti nyelven marad.
+            </span>
+          </span>
+        </button>
+
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={busy}>
             Mégse
           </Button>
           <Button size="sm" disabled={!file || busy} onClick={start}>
             {busy ? <Loader2 className="animate-spin" /> : null}
-            {busy ? "Indítás…" : "Fordítás indítása"}
+            {busy ? "Indítás…" : sample ? "Próbafordítás indítása" : "Fordítás indítása"}
           </Button>
         </DialogFooter>
       </DialogContent>
