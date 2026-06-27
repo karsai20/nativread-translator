@@ -4,6 +4,7 @@ import { parse } from "node-html-parser";
 
 import { parseEpub } from "@/lib/core/epub";
 import { libraryEpubPath } from "@/lib/core/library";
+import { readManifest } from "@/lib/core/job";
 import { loadConfig } from "@/lib/server/config";
 import { jobDirFor, isValidJobId } from "@/lib/server/jobs";
 
@@ -62,5 +63,9 @@ export async function GET(req: Request): Promise<Response> {
     };
   });
 
-  return Response.json({ title: translated.title, items });
+  // Surface sample mode so the reader can warn that only the opening was translated
+  // (otherwise the mostly-original rest of the book looks like a failed translation).
+  const sample = Boolean(readManifest(jobDir)?.sample);
+
+  return Response.json({ title: translated.title, items, sample });
 }

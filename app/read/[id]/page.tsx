@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { use } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, FlaskConical } from "lucide-react";
 import { Reader } from "@/components/reader/Reader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import type { ReaderItem } from "@/lib/jobs/types";
 interface ResultData {
   title: string;
   items: ReaderItem[];
+  sample?: boolean;
 }
 
 export default function ReadPage({ params }: { params: Promise<{ id: string }> }) {
@@ -68,7 +69,23 @@ export default function ReadPage({ params }: { params: Promise<{ id: string }> }
             <Skeleton className="h-64 w-full" />
           </div>
         ) : (
-          <Reader items={data.items} downloadHref={`/api/result?id=${encodeURIComponent(id)}&download=1`} />
+          <>
+            {data.sample && (
+              <div className="mb-6 flex items-start gap-3 rounded-[var(--radius)] border border-primary/40 bg-accent/40 px-4 py-3">
+                <FlaskConical className="mt-0.5 size-4 shrink-0 text-primary" />
+                <p className="text-sm text-card-foreground">
+                  <span className="font-medium">Próbafordítás — csak az első 5%.</span>{" "}
+                  Csak a könyv eleje lett lefordítva, a többi eredeti nyelven maradt. A teljes
+                  fordításhoz{" "}
+                  <Link href="/" className="font-medium underline underline-offset-2">
+                    tölts fel újra
+                  </Link>{" "}
+                  a könyvet a próba-kapcsoló nélkül.
+                </p>
+              </div>
+            )}
+            <Reader items={data.items} downloadHref={`/api/result?id=${encodeURIComponent(id)}&download=1`} />
+          </>
         )}
       </main>
     </div>
