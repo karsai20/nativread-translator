@@ -115,7 +115,10 @@ export function UploadDialog({ onStarted }: UploadDialogProps) {
         >
           <input
             type="file"
-            accept=".epub,application/epub+zip"
+            // iOS/Android file pickers grey out .epub when accept is too narrow, and cloud
+            // sources often report epub as octet-stream/zip — keep it broad so phones can
+            // actually pick the book. The server validates that it is a real EPUB anyway.
+            accept=".epub,application/epub+zip,application/octet-stream,application/zip"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0];
@@ -131,11 +134,11 @@ export function UploadDialog({ onStarted }: UploadDialogProps) {
             {file ? <BookOpen className="size-5" /> : <UploadCloud className="size-5" />}
           </span>
           <span className="min-w-0">
-            <span className="block truncate font-medium">
-              {file ? file.name : "Válassz vagy húzz ide egy EPUB-ot"}
+            <span className={cn("block font-medium", file && "truncate")}>
+              {file ? file.name : "Koppints egy EPUB kiválasztásához"}
             </span>
             <span className="block text-sm text-muted-foreground">
-              {file ? "Készen áll a fordításra" : "EPUB formátum, bármilyen méret"}
+              {file ? "Készen áll a fordításra" : "Telefonról is — EPUB formátum, bármilyen méret"}
             </span>
           </span>
         </label>

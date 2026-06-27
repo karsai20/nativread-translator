@@ -28,7 +28,10 @@ export function DialogContent({
       <DialogOverlay />
       <DialogPrimitive.Content
         className={cn(
-          "fixed left-1/2 top-1/2 z-50 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-5 rounded-[calc(var(--radius)+0.3rem)] border border-border bg-card p-6 shadow-2xl",
+          // max-h + overflow keep the dialog inside small / phone viewports (100dvh tracks
+          // the visible area as mobile browser chrome shows/hides); min-w-0 lets grid
+          // children shrink so long content truncates instead of overflowing.
+          "fixed left-1/2 top-1/2 z-50 grid max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] min-w-0 max-w-lg -translate-x-1/2 -translate-y-1/2 gap-5 overflow-y-auto rounded-[calc(var(--radius)+0.3rem)] border border-border bg-card p-6 shadow-2xl",
           className,
         )}
         {...props}

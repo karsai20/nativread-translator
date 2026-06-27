@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Fraunces, Inter } from "next/font/google";
 import { ThemeProvider } from "@/components/shell/ThemeToggle";
 import { Toaster } from "@/components/ui/sonner";
@@ -21,6 +21,17 @@ const inter = Inter({
 export const metadata: Metadata = {
   title: "Verzió — fordítóműhely",
   description: "Helyi könyvfordító műhely. Tölts fel egy könyvet, és kövesd a fordítás állapotát.",
+};
+
+// Without this, mobile browsers render the page at a ~980px desktop width and shrink it,
+// making the UI tiny and the upload control awkward to tap. device-width fixes that.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+  ],
 };
 
 // Set the theme class before paint so there is no light/dark flash. Default: dark.
