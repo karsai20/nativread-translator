@@ -105,7 +105,10 @@ export function UploadDialog({ onStarted }: UploadDialogProps) {
             if (f) setFile(f);
           }}
           className={cn(
-            "flex cursor-pointer items-center gap-4 rounded-[var(--radius)] border border-dashed border-border bg-surface px-5 py-6 transition-colors hover:border-primary",
+            // min-w-0: the dialog is a CSS grid, whose items default to min-width:auto and
+            // won't shrink — without this a long file name overflows the dialog instead of
+            // letting the inner truncate engage.
+            "flex min-w-0 cursor-pointer items-center gap-4 rounded-[var(--radius)] border border-dashed border-border bg-surface px-5 py-6 transition-colors hover:border-primary",
             drag && "border-primary bg-accent/40",
             file && "border-good/70",
           )}
@@ -144,7 +147,7 @@ export function UploadDialog({ onStarted }: UploadDialogProps) {
           onClick={() => setSample((s) => !s)}
           disabled={busy}
           className={cn(
-            "flex w-full items-start gap-3 rounded-[var(--radius)] border border-border bg-surface px-4 py-3 text-left transition-colors hover:border-primary disabled:opacity-60",
+            "flex w-full min-w-0 items-start gap-3 rounded-[var(--radius)] border border-border bg-surface px-4 py-3 text-left transition-colors hover:border-primary disabled:opacity-60",
             sample && "border-primary bg-accent/40",
           )}
         >
