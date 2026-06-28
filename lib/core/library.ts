@@ -16,6 +16,8 @@ export interface LibraryEntry {
   words: number;
   costUsd: number;
   createdAt: string; // ISO
+  /** True for a 5% preview. Shown in the library but excluded from source-hash dedup. */
+  sample?: boolean;
 }
 
 /** Stable content hash of a source EPUB, for dedup. */
@@ -46,8 +48,21 @@ export function listLibrary(libraryDir: string): LibraryEntry[] {
   return entries.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+/** Look up a single entry by id (used to recover the sample flag for the reader). */
+export function getLibraryEntry(libraryDir: string, id: string): LibraryEntry | undefined {
+  const mp = metaPath(libraryDir, id);
+  if (!existsSync(mp)) return undefined;
+  try {
+    return JSON.parse(readFileSync(mp, "utf8")) as LibraryEntry;
+  } catch {
+    return undefined;
+  }
+}
+
 export function findBySourceHash(libraryDir: string, sourceHash: string): LibraryEntry | undefined {
-  return listLibrary(libraryDir).find((e) => e.sourceHash === sourceHash);
+  // Samples are partial previews, so they must never satisfy a full-book upload — only a
+  // real (non-sample) translation counts as "already translated".
+  return listLibrary(libraryDir).find((e) => e.sourceHash === sourceHash && !e.sample);
 }
 
 export interface SaveToLibraryInput {
@@ -58,6 +73,7 @@ export interface SaveToLibraryInput {
   words: number;
   costUsd: number;
   epubBytes: Uint8Array;
+  sample?: boolean;
 }
 
 export function saveToLibrary(input: SaveToLibraryInput): LibraryEntry {
@@ -72,6 +88,7 @@ export function saveToLibrary(input: SaveToLibraryInput): LibraryEntry {
     words: input.words,
     costUsd: input.costUsd,
     createdAt: new Date().toISOString(),
+    ...(input.sample ? { sample: true } : {}),
   };
   writeFileSync(metaPath(input.libraryDir, input.id), JSON.stringify(entry, null, 2));
   return entry;

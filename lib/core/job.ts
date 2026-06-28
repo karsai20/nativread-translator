@@ -385,9 +385,10 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     const outBytes = writeEpub(epub, translatedByHref);
     writeFileSync(join(jobDir, "output.epub"), outBytes);
 
-    // Persist into the household library so it is not re-translated. A sample is a partial
-    // preview, not the finished book, so it must never satisfy a later full-book request.
-    if (opts.libraryDir && !isSample) {
+    // Persist into the household library. Samples are saved too (so they're findable and
+    // readable from the library) but flagged, so they're badged in the UI and excluded
+    // from source-hash dedup — a later full upload of the same book still translates.
+    if (opts.libraryDir) {
       saveToLibrary({
         libraryDir: opts.libraryDir,
         id,
@@ -396,6 +397,7 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
         words: state.words,
         costUsd: state.cost.usd,
         epubBytes: outBytes,
+        ...(isSample ? { sample: true } : {}),
       });
     }
 

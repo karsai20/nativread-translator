@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parse } from "node-html-parser";
 
 import { parseEpub } from "@/lib/core/epub";
-import { libraryEpubPath } from "@/lib/core/library";
+import { libraryEpubPath, getLibraryEntry } from "@/lib/core/library";
 import { readManifest } from "@/lib/core/job";
 import { loadConfig } from "@/lib/server/config";
 import { jobDirFor, isValidJobId } from "@/lib/server/jobs";
@@ -65,7 +65,8 @@ export async function GET(req: Request): Promise<Response> {
 
   // Surface sample mode so the reader can warn that only the opening was translated
   // (otherwise the mostly-original rest of the book looks like a failed translation).
-  const sample = Boolean(readManifest(jobDir)?.sample);
+  // Prefer the job manifest, but fall back to the library entry (the job dir may be gone).
+  const sample = Boolean(readManifest(jobDir)?.sample ?? getLibraryEntry(config.libraryDir, id)?.sample);
 
   return Response.json({ title: translated.title, items, sample });
 }

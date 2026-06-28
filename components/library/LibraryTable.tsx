@@ -43,9 +43,14 @@ export function LibraryTable({ books, onDelete }: LibraryTableProps) {
               <TableCell className="max-w-[22rem]">
                 <Link
                   href={`/read/${encodeURIComponent(book.id)}`}
-                  className="block truncate font-serif font-medium hover:text-primary"
+                  className="flex items-center gap-2 font-serif font-medium hover:text-primary"
                 >
-                  {book.title}
+                  <span className="truncate">{book.title}</span>
+                  {book.sample && (
+                    <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground" title="Csak az első 5% lett lefordítva">
+                      Próba · 5%
+                    </span>
+                  )}
                 </Link>
               </TableCell>
               <TableCell className="tnum text-right text-muted-foreground">{formatWords(book.words)}</TableCell>
