@@ -1,8 +1,8 @@
 {
-  "name": "quire-translator",
+  "name": "nativread-translator",
   "version": "0.1.0",
   "private": true,
-  "description": "Modern web book translator (EN->HU). Validation gate + reusable core for Quire.",
+  "description": "NativRead translator backend: web/API book translator (EN->HU). Serves the NativRead iOS app; reusable translation core.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
