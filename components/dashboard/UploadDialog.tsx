@@ -16,6 +16,39 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
+type PrecisionMode = "balanced" | "fidelity" | "natural";
+
+interface ServerConfig {
+  provider: string;
+  model?: string;
+  apiConfigured: boolean;
+  precision: PrecisionMode;
+  recommendedProvider: string;
+  recommendedModel: string;
+}
+
+const precisionOptions: Array<{
+  value: PrecisionMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "balanced",
+    label: "Kiegyensúlyozott",
+    description: "Alap mód a legtöbb könyvhöz.",
+  },
+  {
+    value: "fidelity",
+    label: "Hűség",
+    description: "Szigorúbb kihagyás- és jelentésellenőrzés.",
+  },
+  {
+    value: "natural",
+    label: "Természetes",
+    description: "Magyarosabb, kevésbé szó szerinti hang.",
+  },
+];
+
 interface UploadDialogProps {
   /** Called after a translation has been queued, so the dashboard can refresh. */
   onStarted?: () => void;
@@ -28,12 +61,25 @@ export function UploadDialog({ onStarted }: UploadDialogProps) {
   const [drag, setDrag] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [sample, setSample] = React.useState(false);
+  const [precision, setPrecision] = React.useState<PrecisionMode>("balanced");
+  const [config, setConfig] = React.useState<ServerConfig | null>(null);
+
+  React.useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((d: ServerConfig) => {
+        setConfig(d);
+        setPrecision(d.precision ?? "balanced");
+      })
+      .catch(() => {});
+  }, []);
 
   const reset = () => {
     setFile(null);
     setDrag(false);
     setBusy(false);
     setSample(false);
+    setPrecision(config?.precision ?? "balanced");
   };
 
   const start = async () => {
@@ -55,7 +101,7 @@ export function UploadDialog({ onStarted }: UploadDialogProps) {
       const tr = await fetch("/api/translate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ id: uj.id, sample }),
+        body: JSON.stringify({ id: uj.id, sample, precision }),
       });
       if (!tr.ok) throw new Error(((await tr.json()) as { error?: string }).error ?? "A fordítás nem indult el.");
 
@@ -169,6 +215,45 @@ export function UploadDialog({ onStarted }: UploadDialogProps) {
             </span>
           </span>
         </button>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm font-medium">Minőségi mód</span>
+            {config && (
+              <span className="min-w-0 truncate text-xs text-muted-foreground">
+                {config.provider}/{config.model ?? "nincs modell"}
+              </span>
+            )}
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {precisionOptions.map((option) => {
+              const active = precision === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setPrecision(option.value)}
+                  disabled={busy}
+                  className={cn(
+                    "min-w-0 rounded-[var(--radius)] border border-border bg-surface px-3 py-3 text-left transition-colors hover:border-primary disabled:opacity-60",
+                    active && "border-primary bg-accent/40",
+                  )}
+                >
+                  <span className="block text-sm font-medium">{option.label}</span>
+                  <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                    {option.description}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {config && !config.apiConfigured && (
+          <p className="rounded-[var(--radius)] border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
+            Nincs API kulcs beállítva, ezért a szerver fake módban fut.
+          </p>
+        )}
 
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={busy}>

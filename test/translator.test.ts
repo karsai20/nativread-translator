@@ -3,10 +3,12 @@ import { translateBlocks, TranslationGuardError } from "../lib/core/translator.t
 import type { Translator, TranslateChunkInput } from "../lib/core/translator.ts";
 import { FakeTranslator, FAKE_REFINE_TAG } from "../lib/core/providers/fake.ts";
 import { splitBlockSegments, BLOCK_MARKER_OPEN, BLOCK_MARKER_CLOSE } from "../lib/core/markup.ts";
+import { TEXT_SEGMENT_OPEN, TEXT_SEGMENT_CLOSE } from "../lib/core/html-segments.ts";
 
 const REFUSAL = "Sorry, I can't generate a translation for this passage.";
 
 const STRIP_MARKERS = new RegExp(`[${BLOCK_MARKER_OPEN}${BLOCK_MARKER_CLOSE}]`, "g");
+const STRIP_TEXT_SEGMENTS = new RegExp(`[${TEXT_SEGMENT_OPEN}${TEXT_SEGMENT_CLOSE}]`, "g");
 
 const blocks = [
   { index: 0, innerHtml: "Mr. Holloway walked into the <em>old</em> library." },
@@ -118,6 +120,28 @@ test("falls back to per-block translation when a block marker goes missing", asy
   expect(calls).toBe(3);
   expect(res.blocks[0]!.html).toContain("<em>");
   expect(res.blocks[1]!.html).toContain('href="x.xhtml"');
+});
+
+test("preserves nested formatting and links even when text-node markers are dropped", async () => {
+  const markerDropper: Translator = {
+    name: "marker-dropper",
+    async translateChunk(input: TranslateChunkInput) {
+      const out = await new FakeTranslator().translateChunk(input);
+      return { ...out, text: out.text.replace(STRIP_TEXT_SEGMENTS, "") };
+    },
+  };
+
+  const res = await translateBlocks(markerDropper, [
+    {
+      index: 0,
+      innerHtml: 'He <em>found <a class="xref" href="ch2.xhtml">the letter</a></em>.',
+    },
+  ], { glossary: {} });
+
+  const html = res.blocks[0]!.html;
+  expect(html).toContain("<em>");
+  expect(html).toContain('<a class="xref" href="ch2.xhtml">');
+  expect(html).toContain("</a></em>");
 });
 
 test("guard re-translates deterministically when the first draft refuses, then succeeds", async () => {

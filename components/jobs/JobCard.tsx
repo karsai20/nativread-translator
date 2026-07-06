@@ -49,6 +49,11 @@ export function JobCard({ job, onPause, onResume, onCancel, onDelete }: JobCardP
                 Próba · 5%
               </span>
             )}
+            {job.precision && (
+              <span className="rounded-full bg-muted px-2 py-0.5 font-medium text-muted-foreground">
+                {job.precision === "fidelity" ? "Hűség" : job.precision === "natural" ? "Természetes" : "Kiegyensúlyozott"}
+              </span>
+            )}
             <span className="capitalize">{job.provider}</span>
             {updated && <span>· frissítve {updated}</span>}
           </div>

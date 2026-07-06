@@ -1,7 +1,6 @@
 // Translator interface + the quality-critical chunk translation logic.
 //
-// Quality strategy (this is the whole point of the tool, and we only have DeepSeek, so
-// quality must come from HOW we use it):
+// Quality strategy (this is the whole point of the tool, independent of provider):
 //
 //   1. Translate a whole multi-paragraph chunk in ONE request, not paragraph-by-
 //      paragraph. The model sees a full passage, so tone, pronoun reference, and
@@ -11,7 +10,7 @@
 //      passed in, so voice/register/formality continue seamlessly across chunk seams.
 //   3. Carry a names/terms glossary so characters and places stay consistent book-wide.
 //   4. Optional second "polish" pass: ask the model to improve its own draft into more
-//      natural literary Hungarian. Cheap on DeepSeek, a real quality lever.
+//      natural literary Hungarian.
 //   5. Robust fallback: if the model drops a block marker, re-translate that chunk's
 //      blocks individually so output is never lost.
 //   6. Blocking guard: a draft that REFUSES, leaks chain-of-thought / foreign text, or
@@ -20,14 +19,13 @@
 
 import type { GlossaryMap } from "./glossary";
 import {
-  protect,
-  restore,
   stripInlineTags,
   blockMarker,
   splitBlockSegments,
   BLOCK_MARKER_OPEN,
   BLOCK_MARKER_CLOSE,
 } from "./markup";
+import { protectHtmlTextNodes, type ProtectedHtmlText } from "./html-segments";
 import { validateChunk, type ValidateOptions } from "./quality/validators";
 import { routeDraft, MAX_QUALITY_ITERATIONS, type PrecisionMode } from "./quality/route";
 import { guardChunk, type GuardReason } from "./quality/guard";
@@ -41,16 +39,13 @@ export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
   /**
-   * Portion of inputTokens that DeepSeek served from its context cache (billed at the
-   * much cheaper cache-hit rate). Repeated system prompt + glossary + continuity context
-   * make this large in practice, so tracking it is what makes our cost match the
-   * provider's dashboard.
+   * Portion of inputTokens that a provider served from context cache, when reported.
    */
   cachedInputTokens?: number;
 }
 
 export interface TranslateChunkInput {
-  /** Multi-block payload: blocks separated by block markers, inline tags tokenized. */
+  /** Multi-block payload: blocks separated by block markers, text nodes marked. */
   text: string;
   sourceLang: string;
   targetLang: string;
@@ -194,7 +189,7 @@ interface Prepared {
   index: number;
   originalHtml: string;
   text: string;
-  tokens: string[];
+  html: ProtectedHtmlText;
 }
 
 /** Build the guard's view of a finished chunk: source vs translated plain text per block. */
@@ -222,8 +217,8 @@ export async function translateBlocks(
   opts: TranslateBlocksOptions,
 ): Promise<TranslateBlocksResult> {
   const prepared: Prepared[] = blocks.map((b) => {
-    const { text, tokens } = protect(b.innerHtml);
-    return { index: b.index, originalHtml: b.innerHtml, text, tokens };
+    const html = protectHtmlTextNodes(b.innerHtml);
+    return { index: b.index, originalHtml: b.innerHtml, text: html.text, html };
   });
 
   const translatable = prepared.filter((p) => p.text.trim().length > 0);
@@ -346,14 +341,24 @@ async function produceBlocks(
   const allPresent = translatable.every((p) => (byIndex.get(p.index)?.length ?? 0) > 0);
 
   if (allPresent) {
-    const out = prepared.map((p) => {
-      if (p.text.trim().length === 0) return { index: p.index, html: p.originalHtml };
-      return { index: p.index, html: restore(byIndex.get(p.index)!, p.tokens) };
-    });
-    return { blocks: out, usage, plainText: out.map((b) => toPlainText(b.html)).join("\n") };
+    const out: BlockResult[] = [];
+    let restoreFailed = false;
+    for (const p of prepared) {
+      if (p.text.trim().length === 0) {
+        out.push({ index: p.index, html: p.originalHtml });
+        continue;
+      }
+      const html = p.html.restore(byIndex.get(p.index)!);
+      if (html === undefined) {
+        restoreFailed = true;
+        break;
+      }
+      out.push({ index: p.index, html });
+    }
+    if (!restoreFailed) return { blocks: out, usage, plainText: out.map((b) => toPlainText(b.html)).join("\n") };
   }
 
-  // Fallback: a marker went missing. Translate each block on its own so nothing is lost.
+  // Fallback: a block or text-node marker went missing. Translate more narrowly so nothing is lost.
   const fallback = await translateBlocksIndividually(provider, prepared, opts, ctl.deterministic);
   return { blocks: fallback.blocks, usage: addUsage(usage, fallback.usage), plainText: fallback.plainText };
 }
@@ -383,8 +388,44 @@ async function translateBlocksIndividually(
     usage = addUsage(usage, res.usage);
     // Strip any stray block markers the model may have echoed, then restore tags.
     const cleaned = res.text.replace(BLOCK_MARKER_RE, "").trim();
-    out.push({ index: p.index, html: restore(cleaned, p.tokens) });
+    const html = p.html.restore(cleaned);
+    if (html !== undefined) {
+      out.push({ index: p.index, html });
+      continue;
+    }
+
+    const individual = await translateTextSegmentsIndividually(provider, p, opts, deterministic);
+    usage = addUsage(usage, individual.usage);
+    out.push({ index: p.index, html: individual.html });
   }
 
   return { blocks: out, usage, plainText: out.map((b) => toPlainText(b.html)).join("\n") };
+}
+
+async function translateTextSegmentsIndividually(
+  provider: Translator,
+  prepared: Prepared,
+  opts: TranslateBlocksOptions,
+  deterministic: boolean,
+): Promise<{ html: string; usage: TokenUsage }> {
+  let usage = EMPTY_USAGE;
+  const translations = new Map<number, string>();
+
+  for (const segment of prepared.html.segments) {
+    const res = await provider.translateChunk({
+      text: segment.text,
+      sourceLang: SOURCE_LANG,
+      targetLang: TARGET_LANG,
+      glossary: opts.glossary,
+      previousContext: opts.previousContext,
+      deterministic,
+    });
+    usage = addUsage(usage, res.usage);
+    translations.set(segment.index, res.text);
+  }
+
+  return {
+    html: prepared.html.restoreFromSegments(translations),
+    usage,
+  };
 }

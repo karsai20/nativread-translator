@@ -9,7 +9,7 @@
 #
 # The repo is PRIVATE — provide a GitHub token with `repo` scope via GH_TOKEN:
 #
-#   GH_TOKEN=ghp_xxx CTID=150 PORT=48217 PROVIDER_API_KEY=sk-deepseek \
+#   GH_TOKEN=ghp_xxx CTID=150 PORT=48217 TRANSLATION_PROVIDER=openai PROVIDER_API_KEY=sk-... PROVIDER_MODEL=... \
 #     bash -c "$(curl -fsSL -H 'Authorization: token ghp_xxx' \
 #       https://raw.githubusercontent.com/karsai20/quire-translator/main/deploy/proxmox-install.sh)"
 # ===========================================================================
@@ -35,6 +35,10 @@ GATEWAY="${GATEWAY:-}"
 NODE_MAJOR="${NODE_MAJOR:-20}"
 
 PROVIDER_API_KEY="${PROVIDER_API_KEY:-}"
+TRANSLATION_PROVIDER="${TRANSLATION_PROVIDER:-fake}"
+PROVIDER_MODEL="${PROVIDER_MODEL:-}"
+PROVIDER_BASE_URL="${PROVIDER_BASE_URL:-}"
+PROVIDER_REASONER_MODEL="${PROVIDER_REASONER_MODEL:-}"
 COST_CEILING_USD="${COST_CEILING_USD:-10}"
 TRANSLATION_REFINE="${TRANSLATION_REFINE:-1}"
 TRANSLATION_REFINE_SELECTIVE="${TRANSLATION_REFINE_SELECTIVE:-1}"
@@ -92,9 +96,13 @@ pct exec "$CTID" -- bash -lc "
   git -C '$APP_DST' remote set-url origin '$CLONE_URL'   # scrub token
 "
 
-log "Writing .env (port $PORT, provider: $([ -n "$PROVIDER_API_KEY" ] && echo deepseek || echo fake))"
+log "Writing .env (port $PORT, provider: $TRANSLATION_PROVIDER)"
 pct exec "$CTID" -- bash -lc "cat > $APP_DST/.env <<EOF
+TRANSLATION_PROVIDER=$TRANSLATION_PROVIDER
 PROVIDER_API_KEY=$PROVIDER_API_KEY
+PROVIDER_MODEL=$PROVIDER_MODEL
+PROVIDER_BASE_URL=$PROVIDER_BASE_URL
+PROVIDER_REASONER_MODEL=$PROVIDER_REASONER_MODEL
 PORT=$PORT
 HOSTNAME=0.0.0.0
 JOBS_DIR=$APP_DST/data/jobs

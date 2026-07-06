@@ -35,6 +35,8 @@ export interface JobState {
   status: JobStatus;
   provider: string;
   title?: string;
+  userId?: string;
+  sourceHash?: string;
   words: number;
   spineItemCount: number;
   chunks: { total: number; done: number };
@@ -51,6 +53,8 @@ export interface JobState {
   concurrency?: number;
   /** True when only the leading fraction of the book was translated (cheap preview). */
   sample?: boolean;
+  /** Quality mode used for this job. */
+  precision?: PrecisionMode;
 }
 
 interface ChunkResult {
@@ -220,6 +224,7 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
   const sampleFraction = opts.sampleFraction;
   const isSample = typeof sampleFraction === "number" && sampleFraction > 0 && sampleFraction < 1;
   const allChunks: Chunk[] = isSample ? takeLeadingFraction(fullChunks, sampleFraction) : fullChunks;
+  const precision = opts.precision ?? "balanced";
 
   const doneAtStart = allChunks.filter((c) => existsSync(chunkFilePath(jobDir, c.key))).length;
 
@@ -231,6 +236,8 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     status: "running",
     provider: provider.name,
     title: epub.title,
+    ...(prior?.userId ? { userId: prior.userId } : {}),
+    sourceHash: prior?.sourceHash ?? hashSource(epubBytes),
     words: countWords(epub),
     spineItemCount: epub.spine.length,
     chunks: { total: allChunks.length, done: doneAtStart },
@@ -239,6 +246,7 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     createdAt: prior?.createdAt ?? nowIso(),
     startedAt: prior?.startedAt ?? nowIso(),
     chunkDurationsMs: prior?.chunkDurationsMs ?? [],
+    precision,
     ...(isSample ? { sample: true } : {}),
   };
   state = persist(jobDir, state, onProgress);
@@ -250,7 +258,7 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
   // them translate concurrently. The "fixed stuff" is shared read-only by every chunk —
   // the book-wide glossary (names/terms) plus a single style anchor (the translated tail
   // of the first chunk) that replaces the old rolling per-seam tail. A constant anchor
-  // also keeps the prompt prefix identical across chunks, so DeepSeek caches it.
+  // also keeps the prompt prefix identical across chunks for providers with prefix caching.
   const concurrency = Math.max(1, opts.concurrency ?? DEFAULT_CONCURRENCY);
   const workerCount = Math.min(concurrency, Math.max(1, allChunks.length));
   state = persist(jobDir, { ...state, concurrency: workerCount }, onProgress);
@@ -393,7 +401,8 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
         libraryDir: opts.libraryDir,
         id,
         title: epub.title ?? "Névtelen könyv",
-        sourceHash: hashSource(epubBytes),
+        sourceHash: state.sourceHash ?? hashSource(epubBytes),
+        ...(state.userId ? { userId: state.userId } : {}),
         words: state.words,
         costUsd: state.cost.usd,
         epubBytes: outBytes,

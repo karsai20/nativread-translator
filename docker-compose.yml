@@ -8,8 +8,13 @@ services:
     ports:
       - "${PORT:-48217}:48217"
     environment:
-      # Shared household DeepSeek key. Leave empty for the zero-cost fake provider.
+      APP_PROFILE: "web"
+      # Shared household provider key. Leave empty for the zero-cost fake provider.
+      TRANSLATION_PROVIDER: "${TRANSLATION_PROVIDER:-fake}"
       PROVIDER_API_KEY: "${PROVIDER_API_KEY:-}"
+      PROVIDER_MODEL: "${PROVIDER_MODEL:-}"
+      PROVIDER_BASE_URL: "${PROVIDER_BASE_URL:-}"
+      PROVIDER_REASONER_MODEL: "${PROVIDER_REASONER_MODEL:-}"
       COST_CEILING_USD: "${COST_CEILING_USD:-10}"
       TRANSLATION_REFINE: "${TRANSLATION_REFINE:-1}"
       TRANSLATION_REFINE_SELECTIVE: "${TRANSLATION_REFINE_SELECTIVE:-1}"

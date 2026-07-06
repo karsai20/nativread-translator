@@ -6,7 +6,7 @@ continues in-flight work and never re-translates a book the household already ha
 
 > Posture: a private homelab on the household LAN. No auth; keep it on the trusted LAN
 > behind the Proxmox firewall, never port-forwarded to the public internet. The only
-> egress is the user-initiated DeepSeek call. The shared household API key lives only in
+> egress is the user-initiated provider call. The shared household API key lives only in
 > the container env / `.env` and is never logged.
 
 ## Choosing the port
@@ -23,7 +23,7 @@ Run on the **Proxmox host** (PVE shell) as root. `proxmox-install.sh` is self-co
 so pass a `repo`-scoped `GH_TOKEN`:
 
 ```bash
-GH_TOKEN=ghp_xxx CTID=150 PORT=48217 PROVIDER_API_KEY=sk-deepseek \
+GH_TOKEN=ghp_xxx CTID=150 PORT=48217 TRANSLATION_PROVIDER=gemini PROVIDER_API_KEY=... PROVIDER_MODEL=gemini-2.5-flash \
   bash -c "$(curl -fsSL -H 'Authorization: token ghp_xxx' \
     https://raw.githubusercontent.com/karsai20/quire-translator/main/deploy/proxmox-install.sh)"
 ```
@@ -54,12 +54,29 @@ Data lives at `/opt/quire-translator/data/{jobs,library}` — back it up with yo
 
 ```bash
 git clone git@github.com:karsai20/quire-translator.git && cd quire-translator
-cp .env.example .env          # set PROVIDER_API_KEY (optional), PORT, COST_CEILING_USD
+cp .env.example .env          # set TRANSLATION_PROVIDER=gemini, PROVIDER_API_KEY, PROVIDER_MODEL=gemini-2.5-flash
 docker compose up -d --build  # -> http://<host>:48217
 ```
 
 `jobs` and `library` are named volumes, so `docker compose restart` keeps resume + the
 household library intact.
+
+## Separate Docker service for NativRead
+
+For mobile testing, run the dedicated compose file instead of sharing the web workshop
+volumes:
+
+```bash
+git clone git@github.com:karsai20/nativread-translator-backend.git
+cd nativread-translator-backend
+bash scripts/setup-nativread-backend.sh
+```
+
+The first run creates `.env.nativread`; add `PROVIDER_API_KEY`, then run it again.
+Default host port: `48218`. The iOS Simulator uses `http://127.0.0.1:48218` by
+default; on a real iPhone put `http://<host-lan-ip>:48218` into NativRead Settings.
+The container uses `APP_PROFILE=nativread` and independent `nativread-translator-*`
+volumes.
 
 ## Firewall
 

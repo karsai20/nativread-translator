@@ -7,6 +7,7 @@ import { libraryEpubPath, getLibraryEntry } from "@/lib/core/library";
 import { readManifest } from "@/lib/core/job";
 import { loadConfig } from "@/lib/server/config";
 import { jobDirFor, isValidJobId } from "@/lib/server/jobs";
+import { requestContext } from "@/lib/server/request-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,6 +24,9 @@ function titleOf(xhtml: string, index: number): string {
 
 export async function GET(req: Request): Promise<Response> {
   const config = loadConfig();
+  const ctx = await requestContext(req, config);
+  if (ctx instanceof Response) return ctx;
+
   const url = new URL(req.url);
   const id = url.searchParams.get("id");
   if (!id || !isValidJobId(id)) return Response.json({ error: "Hiányzik vagy érvénytelen a job azonosító." }, { status: 400 });
@@ -30,6 +34,16 @@ export async function GET(req: Request): Promise<Response> {
   const jobDir = jobDirFor(config, id);
   const jobOut = join(jobDir, "output.epub");
   const libOut = libraryEpubPath(config.libraryDir, id);
+  const manifest = readManifest(jobDir);
+  const libraryEntry = getLibraryEntry(config.libraryDir, id);
+  // Fail-closed: the result is served only if the caller owns the job or its
+  // library entry. Unknown id and someone-else's id both 404 identically, so a
+  // probe can't distinguish "not yours" from "doesn't exist".
+  const owner = manifest?.userId ?? libraryEntry?.userId;
+  if (owner !== ctx.userId) {
+    return Response.json({ error: "Ismeretlen fordítás." }, { status: 404 });
+  }
+
   const translatedPath = existsSync(jobOut) ? jobOut : existsSync(libOut) ? libOut : null;
   if (!translatedPath) {
     return Response.json({ error: "A fordítás még nem készült el." }, { status: 409 });
@@ -66,7 +80,7 @@ export async function GET(req: Request): Promise<Response> {
   // Surface sample mode so the reader can warn that only the opening was translated
   // (otherwise the mostly-original rest of the book looks like a failed translation).
   // Prefer the job manifest, but fall back to the library entry (the job dir may be gone).
-  const sample = Boolean(readManifest(jobDir)?.sample ?? getLibraryEntry(config.libraryDir, id)?.sample);
+  const sample = Boolean(manifest?.sample ?? libraryEntry?.sample);
 
   return Response.json({ title: translated.title, items, sample });
 }

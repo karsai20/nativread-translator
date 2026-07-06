@@ -52,6 +52,34 @@ test("full job translates the book and writes a valid EPUB", async () => {
   rmSync(jobDir, { recursive: true, force: true });
 });
 
+test("full job preserves the original hyperlink targets and inline structure", async () => {
+  const jobDir = freshJobDir();
+  await runJob({
+    id: "structure",
+    epubBytes: buildFixtureEpub([
+      {
+        href: "ch1.xhtml",
+        id: "ch1",
+        title: "Chapter One",
+        body: '<p>He <em>found <a class="xref" href="ch2.xhtml">the letter</a></em>.</p>',
+      },
+      {
+        href: "ch2.xhtml",
+        id: "ch2",
+        title: "Chapter Two",
+        body: '<p id="target">The answer waited there.</p>',
+      },
+    ]),
+    provider: new FakeTranslator(),
+    jobDir,
+  });
+
+  const reparsed = parseEpub(new Uint8Array(readFileSync(join(jobDir, "output.epub"))));
+  expect(reparsed.spine[0]!.content).toContain('<a class="xref" href="ch2.xhtml">');
+  expect(reparsed.spine[0]!.content).toContain("</a></em>");
+  expect(reparsed.spine[1]!.content).toContain('id="target"');
+});
+
 test("resume: with all chunks on disk, re-run translates nothing", async () => {
   const jobDir = freshJobDir();
 

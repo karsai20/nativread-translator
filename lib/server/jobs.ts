@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 
 import { runJob, readManifest, setManifestStatus, type JobState } from "@/lib/core/job";
+import type { PrecisionMode } from "@/lib/core/quality/route";
 import { createProvider, type ServerConfig } from "./config";
 
 type ControlSignal = "pause" | "cancel";
@@ -14,7 +15,7 @@ const running = new Set<string>();
 const controls = new Map<string, ControlSignal>();
 
 /** Fraction of a book translated in "sample" (preview) mode. */
-export const SAMPLE_FRACTION = 0.05;
+export const SAMPLE_FRACTION = 0.01;
 
 // Job ids are opaque UUIDs (crypto.randomUUID at upload). Anything else is rejected
 // before it can reach a filesystem path — a malicious id like "../../etc" must never
@@ -38,6 +39,18 @@ export function getState(config: ServerConfig, id: string): JobState | undefined
   return states.get(id) ?? readManifest(jobDirFor(config, id));
 }
 
+/**
+ * Ownership predicate: may `userId` act on this job? Fail-closed — a missing
+ * job (`undefined`) OR a job with no recorded owner is owned by nobody, so it
+ * is never accessible. Every job created through `/api/upload` stores an owner
+ * (`ctx.userId`, at least `"local"` in dev), so an ownerless manifest can only
+ * be a stray/legacy artifact and must not be world-readable in a public
+ * deployment. Callers map a `false` result to a 404 so existence isn't leaked.
+ */
+export function ownsJob(state: JobState | undefined, userId: string): boolean {
+  return Boolean(state?.userId) && state?.userId === userId;
+}
+
 export function isRunning(id: string): boolean {
   return running.has(id);
 }
@@ -52,8 +65,16 @@ export function listJobs(config: ServerConfig): JobState[] {
     .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
 }
 
+function isPrecisionMode(value: unknown): value is PrecisionMode {
+  return value === "balanced" || value === "fidelity" || value === "natural";
+}
+
 /** Start (or resume) a translation job in the background. Idempotent while running. */
-export function startJob(config: ServerConfig, id: string, opts: { sample?: boolean } = {}): void {
+export function startJob(
+  config: ServerConfig,
+  id: string,
+  opts: { sample?: boolean; precision?: PrecisionMode } = {},
+): void {
   if (running.has(id)) return;
 
   controls.delete(id); // a fresh start/resume clears any stale signal
@@ -63,7 +84,13 @@ export function startJob(config: ServerConfig, id: string, opts: { sample?: bool
 
   // Honor a sample request, and keep a previously-started sample a sample on resume (the
   // resume route doesn't re-send the flag) so it never silently expands to the whole book.
-  const sample = opts.sample || Boolean(readManifest(jobDir)?.sample);
+  const prior = readManifest(jobDir);
+  const sample = opts.sample || Boolean(prior?.sample);
+  const precision = isPrecisionMode(opts.precision)
+    ? opts.precision
+    : isPrecisionMode(prior?.precision)
+      ? prior.precision
+      : config.precision;
 
   running.add(id);
   void runJob({
@@ -75,7 +102,7 @@ export function startJob(config: ServerConfig, id: string, opts: { sample?: bool
     refine: config.refine,
     selectiveRefine: config.refineSelective,
     reasonerForHard: config.reasonerForHard,
-    precision: config.precision,
+    precision,
     concurrency: config.concurrency,
     libraryDir: config.libraryDir,
     ...(sample ? { sampleFraction: SAMPLE_FRACTION } : {}),

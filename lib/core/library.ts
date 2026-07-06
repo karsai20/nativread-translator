@@ -13,6 +13,7 @@ export interface LibraryEntry {
   id: string;
   title: string;
   sourceHash: string;
+  userId?: string;
   words: number;
   costUsd: number;
   createdAt: string; // ISO
@@ -33,14 +34,15 @@ export function libraryEpubPath(libraryDir: string, id: string): string {
   return join(libraryDir, id, "book.epub");
 }
 
-export function listLibrary(libraryDir: string): LibraryEntry[] {
+export function listLibrary(libraryDir: string, userId?: string): LibraryEntry[] {
   if (!existsSync(libraryDir)) return [];
   const entries: LibraryEntry[] = [];
   for (const id of readdirSync(libraryDir)) {
     const mp = metaPath(libraryDir, id);
     if (!existsSync(mp)) continue;
     try {
-      entries.push(JSON.parse(readFileSync(mp, "utf8")) as LibraryEntry);
+      const entry = JSON.parse(readFileSync(mp, "utf8")) as LibraryEntry;
+      if (!userId || entry.userId === userId) entries.push(entry);
     } catch {
       // Skip a corrupt entry rather than failing the whole listing.
     }
@@ -59,10 +61,14 @@ export function getLibraryEntry(libraryDir: string, id: string): LibraryEntry | 
   }
 }
 
-export function findBySourceHash(libraryDir: string, sourceHash: string): LibraryEntry | undefined {
+export function findBySourceHash(
+  libraryDir: string,
+  sourceHash: string,
+  userId?: string,
+): LibraryEntry | undefined {
   // Samples are partial previews, so they must never satisfy a full-book upload — only a
   // real (non-sample) translation counts as "already translated".
-  return listLibrary(libraryDir).find((e) => e.sourceHash === sourceHash && !e.sample);
+  return listLibrary(libraryDir, userId).find((e) => e.sourceHash === sourceHash && !e.sample);
 }
 
 export interface SaveToLibraryInput {
@@ -70,6 +76,7 @@ export interface SaveToLibraryInput {
   id: string;
   title: string;
   sourceHash: string;
+  userId?: string;
   words: number;
   costUsd: number;
   epubBytes: Uint8Array;
@@ -85,6 +92,7 @@ export function saveToLibrary(input: SaveToLibraryInput): LibraryEntry {
     id: input.id,
     title: input.title,
     sourceHash: input.sourceHash,
+    ...(input.userId ? { userId: input.userId } : {}),
     words: input.words,
     costUsd: input.costUsd,
     createdAt: new Date().toISOString(),

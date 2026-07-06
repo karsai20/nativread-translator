@@ -1,24 +1,22 @@
-// Cost accounting + a hard per-book ceiling. DeepSeek bills per token; we accumulate
+// Cost accounting + a hard per-book ceiling. Providers bill per token; we accumulate
 // reported usage and refuse to start a chunk that would push the book past the ceiling.
 
 import type { TokenUsage } from "./translator";
 import { CHARS_PER_TOKEN } from "./chunker";
 
-// DeepSeek deepseek-v4-flash pricing (USD per 1M tokens), the model `deepseek-chat`
-// now maps to. Input is billed at two rates: cache-miss (fresh) and the much cheaper
-// cache-hit. We repeat the stable system prompt + glossary on every chunk, so DeepSeek
-// serves a large share from cache — pricing those at the miss rate badly overestimates
-// the bill. Splitting the two rates is what makes our number track the provider's.
-// Source: https://api-docs.deepseek.com/quick_start/pricing
-export const PRICE_INPUT_PER_MTOK = 0.14; // cache miss
-export const PRICE_CACHED_INPUT_PER_MTOK = 0.0028; // cache hit
-export const PRICE_OUTPUT_PER_MTOK = 0.28;
+// Default pricing profile (USD per 1M tokens). This tracks Gemini 2.5 Flash
+// Standard text pricing, the recommended MVP provider. Providers differ by model,
+// so production deployments should keep COST_CEILING_USD conservative and treat
+// dashboard billing as authoritative.
+export const PRICE_INPUT_PER_MTOK = 0.30; // cache miss
+export const PRICE_CACHED_INPUT_PER_MTOK = 0.075; // cache hit
+export const PRICE_OUTPUT_PER_MTOK = 2.50;
 
 const MILLION = 1_000_000;
 
 export interface CostState {
   inputTokens: number;
-  /** Portion of inputTokens served from DeepSeek's cache (billed at the cache-hit rate). */
+  /** Portion of inputTokens served from a provider cache, if the adapter reports it. */
   cachedInputTokens: number;
   outputTokens: number;
   usd: number;

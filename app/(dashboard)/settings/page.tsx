@@ -1,15 +1,25 @@
 "use client";
 
 import * as React from "react";
-import { Server, Coins, Sparkles, Sun } from "lucide-react";
+import { Server, Coins, Sparkles, Sun, Cpu, KeyRound, Route, Gauge, Boxes, CheckCircle2 } from "lucide-react";
 import { DashboardHeader } from "@/components/shell/DashboardHeader";
 import { ThemeToggle } from "@/components/shell/ThemeToggle";
 import { formatUsd } from "@/lib/jobs/format";
 
 interface ServerSettings {
   provider: string;
+  model?: string;
+  apiConfigured: boolean;
   costCeilingUsd: number;
   refine: boolean;
+  refineSelective: boolean;
+  reasonerForHard: boolean;
+  reasonerModel?: string;
+  precision: "balanced" | "fidelity" | "natural";
+  concurrency: number;
+  recommendedProvider: string;
+  recommendedModel: string;
+  appProfile: string;
 }
 
 function Row({
@@ -34,9 +44,38 @@ function Row({
           <p className="text-sm text-muted-foreground">{description}</p>
         </div>
       </div>
-      <div className="shrink-0">{children}</div>
+      <div className="shrink-0 text-right">{children}</div>
     </div>
   );
+}
+
+function Pill({
+  children,
+  tone = "neutral",
+}: {
+  children: React.ReactNode;
+  tone?: "neutral" | "good" | "warn";
+}) {
+  return (
+    <span
+      className={[
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium",
+        tone === "good"
+          ? "border-good/30 bg-good/10 text-good"
+          : tone === "warn"
+            ? "border-amber-400/40 bg-amber-500/10 text-amber-900 dark:text-amber-200"
+            : "border-border bg-muted text-muted-foreground",
+      ].join(" ")}
+    >
+      {children}
+    </span>
+  );
+}
+
+function precisionLabel(value?: ServerSettings["precision"]): string {
+  if (value === "fidelity") return "Hűség";
+  if (value === "natural") return "Természetes";
+  return "Kiegyensúlyozott";
 }
 
 export default function SettingsPage() {
@@ -60,11 +99,41 @@ export default function SettingsPage() {
           <Row icon={Server} label="Fordítószolgáltató" description="A háttérben dolgozó motor (környezeti változó).">
             <span className={`${value} capitalize`}>{settings?.provider ?? "…"}</span>
           </Row>
+          <Row icon={Cpu} label="Modell" description="A fordításhoz konfigurált modell.">
+            <span className={value}>{settings?.model ?? "…"}</span>
+          </Row>
+          <Row icon={KeyRound} label="API kulcs" description="A szerver env-ből olvasott provider kulcs állapota.">
+            {settings ? (
+              <Pill tone={settings.apiConfigured ? "good" : "warn"}>
+                {settings.apiConfigured ? "Beállítva" : "Fake mód"}
+              </Pill>
+            ) : (
+              <span className={value}>…</span>
+            )}
+          </Row>
           <Row icon={Coins} label="Költségplafon" description="Könyvenkénti felső határ, amelyen a fordítás leáll.">
             <span className={value}>{settings ? formatUsd(settings.costCeilingUsd) : "…"}</span>
           </Row>
           <Row icon={Sparkles} label="Csiszoló kör" description="Második, minőségjavító fordítási menet.">
             <span className={value}>{settings ? (settings.refine ? "Bekapcsolva" : "Kikapcsolva") : "…"}</span>
+          </Row>
+          <Row icon={Route} label="Minőségi routing" description="Gyenge szakaszok szelektív javítása és eszkalációja.">
+            <span className={value}>
+              {settings
+                ? `${precisionLabel(settings.precision)} · ${settings.refineSelective ? "szelektív" : "minden szakasz"}`
+                : "…"}
+            </span>
+          </Row>
+          <Row icon={Gauge} label="Párhuzamosság" description="Egyszerre futó fordítási szakaszok száma.">
+            <span className={value}>{settings ? `${settings.concurrency} worker` : "…"}</span>
+          </Row>
+          <Row icon={Boxes} label="Runtime profil" description="Webes műhely vagy NativRead mobil backend konténer.">
+            <span className={`${value} uppercase`}>{settings?.appProfile ?? "…"}</span>
+          </Row>
+          <Row icon={CheckCircle2} label="Ajánlott MVP modell" description="Az alap cost/quality választás könyvfordításhoz.">
+            <span className={value}>
+              {settings ? `${settings.recommendedProvider}/${settings.recommendedModel}` : "…"}
+            </span>
           </Row>
           <Row icon={Sun} label="Megjelenés" description="Világos vagy sötét téma ezen a gépen.">
             <ThemeToggle />
@@ -72,8 +141,8 @@ export default function SettingsPage() {
         </div>
 
         <p className="mt-4 text-xs text-muted-foreground">
-          A szolgáltató, a plafon és a csiszoló kör a szerver környezeti változóiból jön
-          (PROVIDER_API_KEY, COST_CEILING_USD, TRANSLATION_REFINE).
+          A szolgáltató, a plafon és az alap minőségi mód szerver környezeti változókból jön.
+          Feltöltéskor a GUI-ból könyvenként felülírható a minőségi mód.
         </p>
       </main>
     </>

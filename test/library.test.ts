@@ -45,6 +45,27 @@ test("dedup: an identical source is found by hash (so it is not re-translated)",
   rmSync(dir, { recursive: true, force: true });
 });
 
+test("dedup is scoped by user", () => {
+  const dir = freshDir();
+  const bytes = buildFixtureEpub();
+  const hash = hashSource(bytes);
+  saveToLibrary({
+    libraryDir: dir,
+    id: "abc",
+    title: "T",
+    sourceHash: hash,
+    userId: "user-a",
+    words: 1,
+    costUsd: 0,
+    epubBytes: bytes,
+  });
+
+  expect(findBySourceHash(dir, hash, "user-a")?.id).toBe("abc");
+  expect(findBySourceHash(dir, hash, "user-b")).toBeUndefined();
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("a sample is listed in the library but excluded from dedup", () => {
   const dir = freshDir();
   const bytes = buildFixtureEpub();
