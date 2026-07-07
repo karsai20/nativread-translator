@@ -1,0 +1,44 @@
+# Render Blueprint — one-click deploy of the NativBook translator backend.
+#
+# Deploy: push this repo to GitHub, then on render.com pick
+#   New → Blueprint → select this repo. Render reads this file, builds the
+#   Dockerfile, provisions the disk, and gives you a public HTTPS URL.
+#
+# The default TRANSLATION_PROVIDER is `fake` (zero-cost dry run) so the first
+# deploy runs the whole flow without a key. Set a real provider + key in the
+# Render dashboard (Environment) to translate for real.
+services:
+  - type: web
+    name: nativbook-translator
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # Persistent disk requires a paid instance type; Starter is the cheapest.
+    plan: starter
+    region: frankfurt
+    healthCheckPath: /
+    autoDeploy: true
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 2
+    envVars:
+      - key: PORT
+        value: "48217"
+      - key: NODE_ENV
+        value: production
+      - key: JOBS_DIR
+        value: /data/jobs
+      - key: LIBRARY_DIR
+        value: /data/library
+      - key: ENTITLEMENTS_DIR
+        value: /data/entitlements
+      # Provider config — `fake` needs no key. Switch to gemini/openai/deepseek
+      # and set PROVIDER_API_KEY + PROVIDER_MODEL in the dashboard to go live.
+      - key: TRANSLATION_PROVIDER
+        value: fake
+      - key: PROVIDER_API_KEY
+        sync: false
+      - key: PROVIDER_MODEL
+        sync: false
+      - key: COST_CEILING_USD
+        value: "10"

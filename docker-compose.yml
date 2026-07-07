@@ -25,10 +25,13 @@ services:
       PORT: "48217"
       JOBS_DIR: "/data/jobs"
       LIBRARY_DIR: "/data/library"
+      ENTITLEMENTS_DIR: "/data/entitlements"
     volumes:
       - quire-jobs:/data/jobs
       - quire-library:/data/library
+      - quire-entitlements:/data/entitlements
 
 volumes:
   quire-jobs:
   quire-library:
+  quire-entitlements:

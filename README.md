@@ -80,6 +80,22 @@ cheap enough for whole-book experiments while keeping better literary quality he
 than Flash-Lite. Keep `TRANSLATION_REFINE_SELECTIVE=1` so the polish pass is spent only
 where the first draft looks weak.
 
+## Deploy to the cloud (one click)
+
+The fastest path to a public HTTPS URL with **no server to manage**. The repo
+ships a [`render.yaml`](./render.yaml) Render Blueprint:
+
+1. Push this repo to GitHub.
+2. On [render.com](https://render.com): **New → Blueprint**, pick this repo.
+3. Render reads `render.yaml`, builds the Dockerfile, provisions the `/data`
+   disk (jobs + library + entitlements persist across restarts), and deploys.
+
+The first deploy runs on the zero-cost `fake` provider. To translate for real,
+set `TRANSLATION_PROVIDER=gemini`, `PROVIDER_API_KEY`, and
+`PROVIDER_MODEL=gemini-2.5-flash` in the Render **Environment** tab. Any host
+that reads a Dockerfile + persistent disk works the same way (Railway, Fly.io);
+Render just has the one-file blueprint.
+
 ## Deploy on Proxmox
 
 Its own container, uncommon port, persistent library — **one paste-able command**:
