@@ -13,6 +13,7 @@ import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseEpub, writeEpub, type Epub } from "./epub";
+import { injectAiMarker } from "./ai-marker";
 import { chunkSpineItem, type Chunk } from "./chunker";
 import { translateBlocks, type Translator } from "./translator";
 import { seedFromText, type GlossaryMap } from "./glossary";
@@ -390,6 +391,9 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
       translatedByHref[item.href] = reserialize(item.content, parsed.doc.toString());
     }
 
+    // EU AI Act Art 50(2): every delivered EPUB (full or sample) carries the
+    // machine-readable AI marker + colophon. Throws rather than deliver unmarked.
+    injectAiMarker(epub, { sourceLang: "en", targetLang: "hu" });
     const outBytes = writeEpub(epub, translatedByHref);
     writeFileSync(join(jobDir, "output.epub"), outBytes);
 
