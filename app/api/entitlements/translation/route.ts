@@ -1,4 +1,8 @@
-import { grantTranslationEntitlement } from "@/lib/server/entitlements";
+import {
+  ENTITLEMENT_LANGUAGES,
+  grantTranslationEntitlement,
+  type EntitlementLanguage,
+} from "@/lib/server/entitlements";
 import { loadConfig } from "@/lib/server/config";
 import { requestContext } from "@/lib/server/request-context";
 
@@ -14,6 +18,7 @@ export async function POST(req: Request): Promise<Response> {
 
   const body = (await req.json().catch(() => ({}))) as {
     sourceHash?: string;
+    targetLanguage?: string;
     transactionId?: string;
     productId?: string;
     signedTransactionInfo?: string;
@@ -21,6 +26,12 @@ export async function POST(req: Request): Promise<Response> {
 
   if (!body.sourceHash || !SOURCE_HASH_RE.test(body.sourceHash)) {
     return Response.json({ error: "Invalid source hash." }, { status: 400 });
+  }
+  // Default "hu" keeps pre-multi-language clients working; anything else
+  // must be an explicitly supported language.
+  const targetLanguage = (body.targetLanguage ?? "hu") as EntitlementLanguage;
+  if (!ENTITLEMENT_LANGUAGES.includes(targetLanguage)) {
+    return Response.json({ error: "Unsupported target language." }, { status: 400 });
   }
   if (!body.transactionId?.trim() || !body.productId?.trim()) {
     return Response.json({ error: "Missing transaction metadata." }, { status: 400 });
@@ -39,6 +50,7 @@ export async function POST(req: Request): Promise<Response> {
   const entitlement = grantTranslationEntitlement(config, {
     userId: ctx.userId,
     sourceHash: body.sourceHash.toLowerCase(),
+    targetLanguage,
     transactionId: body.transactionId.trim(),
     productId: body.productId.trim(),
   });

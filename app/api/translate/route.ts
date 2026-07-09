@@ -40,7 +40,9 @@ export async function POST(req: Request): Promise<Response> {
 
   if (!sample && config.requireFullTranslationEntitlements) {
     const sourceHash = manifest?.sourceHash ?? hashSource(new Uint8Array(readFileSync(sourcePath)));
-    if (!hasTranslationEntitlement(config, ctx.userId, sourceHash)) {
+    // The pipeline is Hungarian-only today; when jobs carry a target
+    // language, check the job's language here instead.
+    if (!hasTranslationEntitlement(config, ctx.userId, sourceHash, "hu")) {
       return Response.json(
         { error: "Full-book translation requires a verified purchase." },
         { status: 402 },

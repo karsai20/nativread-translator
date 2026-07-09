@@ -4,9 +4,17 @@ import { join } from "node:path";
 
 import type { ServerConfig } from "./config";
 
+// Entitlement identity is (userId, sourceHash, targetLanguage) — eng D9:
+// a multi-language launch collides on (userId, sourceHash) alone. The free
+// trial deliberately stays per (userId, sourceHash): one free taste per BOOK,
+// any language, so the abuse bound doesn't scale with language count.
+export const ENTITLEMENT_LANGUAGES = ["hu", "de", "es"] as const;
+export type EntitlementLanguage = (typeof ENTITLEMENT_LANGUAGES)[number];
+
 export interface TranslationEntitlement {
   userId: string;
   sourceHash: string;
+  targetLanguage: EntitlementLanguage;
   transactionId: string;
   productId: string;
   createdAt: string;
@@ -15,6 +23,7 @@ export interface TranslationEntitlement {
 export interface GrantTranslationEntitlementInput {
   userId: string;
   sourceHash: string;
+  targetLanguage: EntitlementLanguage;
   transactionId: string;
   productId: string;
 }
@@ -23,8 +32,18 @@ function safeSegment(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function userSourcePath(config: ServerConfig, userId: string, sourceHash: string): string {
-  return join(config.entitlementsDir, "users", safeSegment(userId), `${sourceHash}.json`);
+function userSourcePath(
+  config: ServerConfig,
+  userId: string,
+  sourceHash: string,
+  targetLanguage: EntitlementLanguage,
+): string {
+  return join(
+    config.entitlementsDir,
+    "users",
+    safeSegment(userId),
+    `${sourceHash}.${targetLanguage}.json`,
+  );
 }
 
 function transactionPath(config: ServerConfig, transactionId: string): string {
@@ -44,8 +63,11 @@ export function hasTranslationEntitlement(
   config: ServerConfig,
   userId: string,
   sourceHash: string,
+  targetLanguage: EntitlementLanguage,
 ): boolean {
-  return Boolean(readEntitlement(userSourcePath(config, userId, sourceHash)));
+  return Boolean(
+    readEntitlement(userSourcePath(config, userId, sourceHash, targetLanguage)),
+  );
 }
 
 export function grantTranslationEntitlement(
@@ -59,12 +81,18 @@ export function grantTranslationEntitlement(
   const entitlement: TranslationEntitlement = {
     userId: input.userId,
     sourceHash: input.sourceHash,
+    targetLanguage: input.targetLanguage,
     transactionId: input.transactionId,
     productId: input.productId,
     createdAt: new Date().toISOString(),
   };
 
-  const byUserSource = userSourcePath(config, input.userId, input.sourceHash);
+  const byUserSource = userSourcePath(
+    config,
+    input.userId,
+    input.sourceHash,
+    input.targetLanguage,
+  );
   mkdirSync(join(config.entitlementsDir, "transactions"), { recursive: true });
   mkdirSync(join(config.entitlementsDir, "users", safeSegment(input.userId)), { recursive: true });
   try {
