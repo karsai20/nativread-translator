@@ -6,6 +6,11 @@ import { createCostState } from "@/lib/core/cost";
 import type { JobState } from "@/lib/core/job";
 import { hashSource, findBySourceHash } from "@/lib/core/library";
 import { loadConfig } from "@/lib/server/config";
+import {
+  ENTITLEMENT_LANGUAGES,
+  hasTranslationEntitlement,
+} from "@/lib/server/entitlements";
+import { appendEvent } from "@/lib/server/events";
 import { jobDirFor, cacheState } from "@/lib/server/jobs";
 import { requestContext } from "@/lib/server/request-context";
 
@@ -32,10 +37,25 @@ export async function POST(req: Request): Promise<Response> {
     title = epub.title;
     spineItemCount = epub.spine.length;
   } catch (err) {
+    // T18 failure bucket: import-broken cohorts must be visible as a
+    // denominator, not masquerade as a conversion failure.
+    appendEvent(config, {
+      type: "import-failed",
+      userId: ctx.userId,
+      detail: (err as Error).message.slice(0, 120),
+    });
     return Response.json({ error: `Érvénytelen EPUB: ${(err as Error).message}` }, { status: 400 });
   }
 
   const sourceHash = hashSource(bytes);
+  // Entitlement restore by re-upload (eng D11 / E5): consumables have no
+  // Apple-side restore, so the server entitlement row IS the restore. The
+  // client reads entitledLanguages and offers the full translation at no
+  // charge instead of asking the user to pay again after a reinstall.
+  const entitledLanguages = ENTITLEMENT_LANGUAGES.filter((lang) =>
+    hasTranslationEntitlement(config, ctx.userId, sourceHash, lang),
+  );
+
   // User-scoped dedup: an identical book is already translated for this user — don't redo it.
   const existing = findBySourceHash(config.libraryDir, sourceHash, ctx.userId);
   if (existing) {
@@ -45,6 +65,7 @@ export async function POST(req: Request): Promise<Response> {
       spineItemCount,
       provider: config.providerName,
       alreadyTranslated: true,
+      entitledLanguages,
     });
   }
 
@@ -69,5 +90,11 @@ export async function POST(req: Request): Promise<Response> {
   writeFileSync(join(jobDir, "manifest.json"), JSON.stringify(state, null, 2));
   cacheState(state);
 
-  return Response.json({ id, title, spineItemCount, provider: config.providerName });
+  return Response.json({
+    id,
+    title,
+    spineItemCount,
+    provider: config.providerName,
+    entitledLanguages,
+  });
 }

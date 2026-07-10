@@ -7,6 +7,7 @@ import { readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { runJob, readManifest, setManifestStatus, type JobState } from "@/lib/core/job";
 import type { PrecisionMode } from "@/lib/core/quality/route";
 import { createProvider, type ServerConfig } from "./config";
+import { appendEvent } from "./events";
 
 type ControlSignal = "pause" | "cancel";
 
@@ -109,6 +110,18 @@ export function startJob(
     onProgress: cacheState,
     shouldStop: () => controls.get(id), // peek; cleared in finally
   })
+    .then((final) => {
+      // T18 failure bucket (E6): refusals are a T15 provider-selection datum
+      // and part of the kill-signal denominator.
+      if (final?.errorCode === "moderation_refusal") {
+        appendEvent(config, {
+          type: "moderation-refused",
+          ...(final.userId ? { userId: final.userId } : {}),
+          jobId: id,
+          detail: `refusedChunks=${final.refusedChunks ?? 0}`,
+        });
+      }
+    })
     .catch((err) => {
       console.error(`[job ${id}] failed:`, err instanceof Error ? err.message : err);
     })
