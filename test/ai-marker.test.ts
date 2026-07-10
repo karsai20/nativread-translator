@@ -98,6 +98,51 @@ test("appends to an existing package prefix attribute instead of clobbering it",
   expect(marked).toContain(`prefix="schema: http://schema.org/ ${IPTC_PREFIX_DECL}"`);
 });
 
+test("handles a single-quoted prefix attribute without emitting a second one", () => {
+  const epub = parseEpub(buildFixtureEpub());
+  const opf = strFromU8(epub.entries["OEBPS/content.opf"]!).replace(
+    "<package ",
+    "<package prefix='schema: http://schema.org/' ",
+  );
+  epub.entries["OEBPS/content.opf"] = new TextEncoder().encode(opf);
+
+  injectAiMarker(epub, OPTS);
+
+  const marked = strFromU8(epub.entries["OEBPS/content.opf"]!);
+  expect(marked).toContain(`prefix="schema: http://schema.org/ ${IPTC_PREFIX_DECL}"`);
+  expect(marked.match(/\bprefix\s*=/g)!.length).toBe(1);
+});
+
+test("tolerates whitespace inside close tags (</metadata >)", () => {
+  const epub = parseEpub(buildFixtureEpub());
+  const opf = strFromU8(epub.entries["OEBPS/content.opf"]!)
+    .replace("</metadata>", "</metadata >")
+    .replace("</manifest>", "</manifest >")
+    .replace("</spine>", "</spine >");
+  epub.entries["OEBPS/content.opf"] = new TextEncoder().encode(opf);
+
+  injectAiMarker(epub, OPTS);
+
+  const marked = strFromU8(epub.entries["OEBPS/content.opf"]!);
+  expect(marked).toContain(DIGITAL_SOURCE_TYPE_URI);
+  expect(marked).toContain(`<itemref idref="${COLOPHON_ID}"/>`);
+});
+
+test("a publisher's pre-existing trainedAlgorithmicMedia mark does not suppress our layers", () => {
+  const epub = parseEpub(buildFixtureEpub());
+  const opf = strFromU8(epub.entries["OEBPS/content.opf"]!).replace(
+    "</metadata>",
+    `  <meta property="iptc:DigitalSourceType">${DIGITAL_SOURCE_TYPE_URI}</meta>\n  </metadata>`,
+  );
+  epub.entries["OEBPS/content.opf"] = new TextEncoder().encode(opf);
+
+  injectAiMarker(epub, OPTS);
+
+  const marked = strFromU8(epub.entries["OEBPS/content.opf"]!);
+  expect(marked).toContain('id="nativbook-ai-marker"');
+  expect(marked).toContain(`<itemref idref="${COLOPHON_ID}"/>`);
+});
+
 test("fails loudly on an OPF without a metadata block", () => {
   const epub = parseEpub(buildFixtureEpub());
   const opf = strFromU8(epub.entries["OEBPS/content.opf"]!)

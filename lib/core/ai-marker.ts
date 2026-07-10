@@ -90,7 +90,10 @@ export function injectAiMarker(epub: Epub, opts: AiMarkerOptions): void {
   if (!opfBytes) throw new Error(`AI marker: OPF not found at ${epub.opfPath}`);
   let opf = strFromU8(opfBytes);
   // Idempotent: a resumed/re-run delivery must not stack duplicate markers.
-  if (opf.includes(DIGITAL_SOURCE_TYPE_URI)) return;
+  // Keyed on OUR marker id, not the IPTC URI — a source EPUB that already
+  // carries a publisher's trainedAlgorithmicMedia mark must still get the
+  // NativBook layers (description + colophon), or the Art 50 duty is unmet.
+  if (opf.includes('id="nativbook-ai-marker"')) return;
   const date = opts.date ?? new Date().toISOString().slice(0, 10);
 
   // 1. Declare the IPTC prefix on <package>. Append to an existing prefix
@@ -98,29 +101,34 @@ export function injectAiMarker(epub: Epub, opts: AiMarkerOptions): void {
   if (!opf.includes(IPTC_PREFIX_DECL)) {
     const packageTag = opf.match(/<package\b[^>]*>/);
     if (!packageTag) throw new Error("AI marker: OPF has no <package> tag");
-    const existingPrefix = packageTag[0].match(/\bprefix\s*=\s*"([^"]*)"/);
+    // XML attributes may be single- or double-quoted; missing either style
+    // would add a second prefix attribute and emit malformed XML.
+    const existingPrefix = packageTag[0].match(/\bprefix\s*=\s*(?:"([^"]*)"|'([^']*)')/);
+    const existingValue = existingPrefix ? (existingPrefix[1] ?? existingPrefix[2]) : undefined;
     const updatedTag = existingPrefix
-      ? packageTag[0].replace(existingPrefix[0], `prefix="${existingPrefix[1]} ${IPTC_PREFIX_DECL}"`)
+      ? packageTag[0].replace(existingPrefix[0], `prefix="${existingValue} ${IPTC_PREFIX_DECL}"`)
       : packageTag[0].replace(/<package\b/, `<package prefix="${IPTC_PREFIX_DECL}"`);
     opf = opf.replace(packageTag[0], updatedTag);
   }
 
-  // 2. Marker metadata, inserted just before </metadata>.
-  if (!opf.includes("</metadata>")) throw new Error("AI marker: OPF has no <metadata> block");
+  // 2. Marker metadata, inserted just before </metadata>. Close tags are
+  // matched with optional whitespace (`</metadata >` is valid XML) so a
+  // paid job never throws after translating over cosmetic formatting.
+  if (!/<\/metadata\s*>/.test(opf)) throw new Error("AI marker: OPF has no <metadata> block");
   const metadata =
     `    <meta property="iptc:DigitalSourceType">${DIGITAL_SOURCE_TYPE_URI}</meta>\n` +
     `    <dc:description id="nativbook-ai-marker">${markerSentence(opts)}</dc:description>\n`;
-  opf = opf.replace("</metadata>", `${metadata}  </metadata>`);
+  opf = opf.replace(/<\/metadata\s*>/, `${metadata}  </metadata>`);
 
   // 3. Colophon page: manifest item + last spine itemref + the XHTML entry.
-  if (!opf.includes("</manifest>") || !opf.includes("</spine>")) {
+  if (!/<\/manifest\s*>/.test(opf) || !/<\/spine\s*>/.test(opf)) {
     throw new Error("AI marker: OPF has no manifest/spine");
   }
   opf = opf.replace(
-    "</manifest>",
+    /<\/manifest\s*>/,
     `  <item id="${COLOPHON_ID}" href="${COLOPHON_HREF}" media-type="application/xhtml+xml"/>\n  </manifest>`,
   );
-  opf = opf.replace("</spine>", `  <itemref idref="${COLOPHON_ID}"/>\n  </spine>`);
+  opf = opf.replace(/<\/spine\s*>/, `  <itemref idref="${COLOPHON_ID}"/>\n  </spine>`);
 
   const opfDir = epub.opfPath.includes("/")
     ? epub.opfPath.slice(0, epub.opfPath.lastIndexOf("/") + 1)
