@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { parseEpub, writeEpub, type Epub } from "./epub";
 import { injectAiMarker } from "./ai-marker";
 import { chunkSpineItem, type Chunk } from "./chunker";
-import { translateBlocks, type Translator } from "./translator";
+import { translateBlocks, TranslationGuardError, type Translator } from "./translator";
 import { seedFromText, type GlossaryMap } from "./glossary";
 import { stripInlineTags } from "./markup";
 import {
@@ -43,6 +43,15 @@ export interface JobState {
   chunks: { total: number; done: number };
   cost: CostState;
   error?: string;
+  /**
+   * Machine-readable error class (eng D4 / E3). "moderation_refusal" means the
+   * provider deterministically refused content — retrying re-fails identically
+   * and re-burns cost, so clients must show non-retry copy and the free-chapter
+   * credit is not consumed. Absent for transient failures, which stay retryable.
+   */
+  errorCode?: "moderation_refusal";
+  /** How many chunks the provider refused on content grounds (T15 datum). */
+  refusedChunks?: number;
   /** ISO timestamps. Optional so manifests written before this feature still parse. */
   createdAt?: string;
   updatedAt?: string;
@@ -269,6 +278,7 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
   let stopSignal: "pause" | "cancel" | undefined;
   let ceilingHit = false;
   let failedChunks = 0;
+  let refusedChunks = 0;
 
   const processChunk = async (chunk: Chunk, anchor: string): Promise<ChunkResult | undefined> => {
     const cached = loadChunkResult(jobDir, chunk.key);
@@ -301,7 +311,18 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
       // Per-chunk isolation: a chunk that fails after transport retries is left uncached
       // (so resume retries only it) and never aborts the whole book.
       failedChunks += 1;
-      console.error(`[job ${id}] chunk ${chunk.key} failed:`, err instanceof Error ? err.message : err);
+      // A guard-confirmed refusal is deterministic (it already survived the
+      // temp-0 retry inside translateBlocks) — classify it separately so the
+      // job can end with non-retry semantics instead of "try again" copy.
+      if (err instanceof TranslationGuardError && err.reasons.some((r) => r.reason === "refusal")) {
+        refusedChunks += 1;
+        console.error(
+          `[job ${id}] chunk ${chunk.key} REFUSED by provider (moderation):`,
+          err.reasons.map((r) => `#${r.index}:${r.reason}`).join(", "),
+        );
+      } else {
+        console.error(`[job ${id}] chunk ${chunk.key} failed:`, err instanceof Error ? err.message : err);
+      }
       return undefined;
     }
     const durationMs = Date.now() - startedMs;
@@ -363,8 +384,25 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
       throw new CostCeilingError(state.cost);
     }
     if (failedChunks > 0) {
-      // Some chunks could not be translated. The good ones are cached, so a resume
-      // retries only the missing chunks — no whole-book restart, no double payment.
+      // Refusals are deterministic: a retry re-fails identically while re-burning
+      // API cost, so the error is a distinct non-retry class (eng D4 / E3). The
+      // client shows "can't be translated" copy and does NOT consume the
+      // free-chapter credit; the manifest keeps refusedChunks as the T15 datum.
+      if (refusedChunks > 0) {
+        state = {
+          ...state,
+          status: "error",
+          errorCode: "moderation_refusal",
+          refusedChunks,
+          error:
+            "Ezt a könyvet (vagy egy részét) a fordítómodell tartalmi okból nem fordítja le. " +
+            "Az újrapróbálkozás nem segít; az ingyenes fejezet-keretedet ez nem használja el.",
+          finishedAt: nowIso(),
+        };
+        return persist(jobDir, state, onProgress);
+      }
+      // Transient failures: the good chunks are cached, so a resume retries only
+      // the missing ones — no whole-book restart, no double payment.
       state = {
         ...state,
         status: "error",
