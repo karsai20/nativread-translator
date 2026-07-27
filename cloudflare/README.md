@@ -41,9 +41,12 @@ schema is present — that column is stale. Query `sqlite_master` instead.
 
 Verified so far: `GET /health`, the 401 boundary on authenticated routes, and
 the JSON 404. Apple login, a sample translation, result consumption, retention
-cleanup and account deletion are still unverified, so
-`NativReadDefaultTranslationBackendURL` in the iOS `project.yml` is
-deliberately still empty.
+cleanup and account deletion are **still unverified**.
+
+`NativReadDefaultTranslationBackendURL` in the iOS `project.yml` already points
+at this Worker, ahead of that verification, so a fresh install needs no manual
+setup. Treat the list above as an open release gate rather than a done one: it
+must pass before an App Store build ships.
 
 ```bash
 bun install --frozen-lockfile
