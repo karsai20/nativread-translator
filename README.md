@@ -1,14 +1,14 @@
 # nativread-translator
 
-The translation backend for **NativRead** (formerly `quire-translator`). A modern,
+The translation backend and **NativRead Web** application. A modern,
 self-hosted **web book translator**: upload an EPUB, get it back in fluent
 **Hungarian**, read it in the browser (bilingual toggle) or download the translated
 EPUB. Translated books are kept in a **household library** so they are never
 re-translated. Also serves the NativRead iOS app over the same API.
 
-It also **de-risks Quire's flagship bet** — that chunked AI translation produces
+It also **de-risks NativRead's flagship bet** — that chunked AI translation produces
 Hungarian a native reader actually accepts — and grows a **reusable translation core**
-whose design ports to Swift (Quire Phase 2). See [`PLAN.md`](./PLAN.md).
+whose design ports to Swift (NativRead Phase 2). See [`PLAN.md`](./PLAN.md).
 
 ## Translation quality is the point
 
@@ -74,27 +74,35 @@ Next.js (App Router) · shadcn-style UI · Tailwind v4 · framework-agnostic cor
 | `TRANSLATION_REASONER_HARD` | `1` | Refine the weakest chunks on `PROVIDER_REASONER_MODEL` when configured. |
 | `TRANSLATION_PRECISION` | `balanced` | Quality mode: `balanced`, `fidelity` (stricter on meaning/omission + back-translation), or `natural`. |
 | `TRANSLATION_CONCURRENCY` | `4` | Chapters translated in parallel (1–8). Higher = faster, more API load. |
+| `MAX_EPUB_UPLOAD_BYTES` | `33554432` | Maximum compressed EPUB upload (32 MiB). |
+| `MAX_EPUB_ENTRIES` | `2000` | Maximum ZIP central-directory entries. |
+| `MAX_EPUB_UNCOMPRESSED_BYTES` | `134217728` | Maximum total expanded EPUB size (128 MiB). |
+| `APPLE_CLIENT_IDS` | _(empty)_ | Sign in with Apple audiences; setting this activates public authenticated mode. |
+| `NATIVREAD_SESSION_SECRET` | _(empty)_ | At least 32 random characters; signs 30-day backend sessions after Apple login. |
+| `REQUIRE_TRANSLATION_ENTITLEMENTS` | `0` | Require either a legacy entitlement or sufficient character credits for full-book jobs. |
+| `STOREKIT_ALLOW_UNSIGNED_GRANTS` | `0` | Trusted-LAN test switch for `$0` placeholder credit purchases; never enable publicly. |
+| `ARTIFACT_RETENTION_HOURS` | `24` in public mode, otherwise `0` | Maximum age of abandoned source/result artifacts; successful consumed downloads are deleted immediately. |
 
 Recommended MVP provider: `gemini` with `PROVIDER_MODEL=gemini-2.5-flash`. It is
 cheap enough for whole-book experiments while keeping better literary quality headroom
 than Flash-Lite. Keep `TRANSLATION_REFINE_SELECTIVE=1` so the polish pass is spent only
 where the first draft looks weak.
 
-## Deploy to the cloud (one click)
+## Deploy to the cloud
 
-The fastest path to a public HTTPS URL with **no server to manage**. The repo
-ships a [`render.yaml`](./render.yaml) Render Blueprint:
+Production runs on Cloudflare: a Worker API in front of EU D1, EU R2, a Queue
+and a Workflow, with the translation itself in an EU Container. Provisioning,
+secrets, the tenant boundary and the release gates live in
+[`cloudflare/README.md`](./cloudflare/README.md).
 
-1. Push this repo to GitHub.
-2. On [render.com](https://render.com): **New → Blueprint**, pick this repo.
-3. Render reads `render.yaml`, builds the Dockerfile, provisions the `/data`
-   disk (jobs + library + entitlements persist across restarts), and deploys.
+```bash
+bun run cf:typecheck && bun run cf:dry-run
+bun run cf:deploy
+```
 
-The first deploy runs on the zero-cost `fake` provider. To translate for real,
-set `TRANSLATION_PROVIDER=gemini`, `PROVIDER_API_KEY`, and
-`PROVIDER_MODEL=gemini-2.5-flash` in the Render **Environment** tab. Any host
-that reads a Dockerfile + persistent disk works the same way (Railway, Fly.io);
-Render just has the one-file blueprint.
+The Next/Bun server in this repo stays for LAN development and rollback. Any
+host that reads a Dockerfile plus a persistent disk (Railway, Fly.io, a plain
+VPS) still runs it, but it is no longer the production target.
 
 ## Deploy on Proxmox
 
@@ -103,7 +111,7 @@ Its own container, uncommon port, persistent library — **one paste-able comman
 ```bash
 GH_TOKEN=ghp_xxx CTID=150 PORT=48217 TRANSLATION_PROVIDER=gemini PROVIDER_API_KEY=... PROVIDER_MODEL=gemini-2.5-flash \
   bash -c "$(curl -fsSL -H "Authorization: token ghp_xxx" \
-    https://raw.githubusercontent.com/karsai20/quire-translator/main/deploy/proxmox-install.sh)"
+    https://raw.githubusercontent.com/karsai20/nativread-translator/main/deploy/proxmox-install.sh)"
 ```
 
 Full guide (LXC + Docker, firewall, updates): [`deploy/README.md`](./deploy/README.md).
@@ -113,16 +121,19 @@ docker compose up -d --build   # the Docker alternative
 
 ## NativRead mobile backend
 
-Run a separate container for the iPhone app so its jobs/library do not mix with the
-web workshop:
+Run a separate container for the iPhone app so its jobs/library do not mix with
+NativRead Web:
 
 ```bash
-git clone git@github.com:karsai20/nativread-translator-backend.git
-cd nativread-translator-backend
+git clone git@github.com:karsai20/nativread-translator.git
+cd nativread-translator
 bash scripts/setup-nativread-backend.sh
 ```
 
 The first run creates `.env.nativread`; add `PROVIDER_API_KEY`, then run the script
 again. It listens on `http://<host>:48218` by default. The iOS Simulator uses
-`http://127.0.0.1:48218` by default; on a real iPhone set the Mac/server LAN IP in
-NativRead Settings. See [`docs/nativread-backend-setup.md`](./docs/nativread-backend-setup.md).
+`http://127.0.0.1:48218` when entered in NativRead Settings; on a real iPhone set
+the Mac/server LAN IP there instead. For a no-charge end-to-end purchase test, set
+`REQUIRE_TRANSLATION_ENTITLEMENTS=1` and `STOREKIT_ALLOW_UNSIGNED_GRANTS=1` only on
+the trusted LAN backend. See
+[`docs/nativread-backend-setup.md`](./docs/nativread-backend-setup.md).

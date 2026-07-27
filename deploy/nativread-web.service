@@ -1,5 +1,5 @@
 [Unit]
-Description=quire-translator (web book translator, EN->HU)
+Description=nativread-web (web book translator, EN->HU)
 After=network-online.target
 Wants=network-online.target
 
@@ -7,9 +7,9 @@ Wants=network-online.target
 Type=simple
 # Next.js standalone server. WorkingDirectory must be the standalone root so it finds
 # .next/static alongside server.js.
-WorkingDirectory=/opt/quire-translator/.next/standalone
+WorkingDirectory=/opt/nativread-web/.next/standalone
 ExecStart=/usr/bin/node server.js
-EnvironmentFile=/opt/quire-translator/.env
+EnvironmentFile=/opt/nativread-web/.env
 Environment=NODE_ENV=production
 Environment=HOSTNAME=0.0.0.0
 Restart=always

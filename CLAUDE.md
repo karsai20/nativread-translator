@@ -1,6 +1,6 @@
 # nativread-translator
 
-Self-hosted web EPUB translator EN→HU (Next.js 15 App Router, React 19, Bun, Tailwind 4). Purpose: the translation backend for the NativRead iOS app (`docker-compose.nativread.yml`, requests scoped by install id) plus a reusable translation core. Formerly named `quire-translator` (Quire→NativRead rebrand). Plan: `PLAN.md`.
+Self-hosted web EPUB translator EN→HU (Next.js 15 App Router, React 19, Bun, Tailwind 4). Purpose: the `NativRead Web` product (`nativread-web` at runtime), the translation backend for the NativRead iOS app (`docker-compose.nativread.yml`), and a reusable translation core. Plan: `PLAN.md`.
 
 ## Commands
 
@@ -15,7 +15,7 @@ With no provider key a deterministic **fake provider** runs the whole flow — u
 
 ## Architecture
 
-- `lib/core/` — provider-agnostic translation engine (chunker, glossary, markup, `providers/`). **Keep it framework-free**: it is designed to port to Swift for Quire Phase 2. No Next/React/Node-only imports here.
+- `lib/core/` — provider-agnostic translation engine (chunker, glossary, markup, `providers/`). **Keep it framework-free**: it is designed to port to Swift for NativRead Phase 2. No Next/React/Node-only imports here.
 - `lib/server/`, `lib/jobs/` — server orchestration and job runner; `app/` — UI + API routes; `library/` — household library of translated books (never re-translate an already-translated book).
 
 ## Quality invariants (the product's whole point — don't "optimize" away)

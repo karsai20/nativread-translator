@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-24
 **Status:** Approved design (pre-implementation)
-**Component:** quire-translator translation engine (`lib/core`, `lib/server`)
+**Component:** nativread-translator translation engine (`lib/core`, `lib/server`)
 
 ## Goal
 

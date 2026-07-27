@@ -1,9 +1,9 @@
-# Run quire-translator as its own container on an uncommon, configurable port (48217).
+# Run nativread-web as its own container on an uncommon, configurable port (48217).
 # Jobs (resume) and the household library persist on named volumes across restarts.
 services:
-  quire-translator:
+  nativread-web:
     build: .
-    container_name: quire-translator
+    container_name: nativread-web
     restart: unless-stopped
     ports:
       - "${PORT:-48217}:48217"
@@ -21,17 +21,20 @@ services:
       TRANSLATION_REASONER_HARD: "${TRANSLATION_REASONER_HARD:-1}"
       TRANSLATION_PRECISION: "${TRANSLATION_PRECISION:-balanced}"
       TRANSLATION_CONCURRENCY: "${TRANSLATION_CONCURRENCY:-4}"
+      MAX_EPUB_UPLOAD_BYTES: "${MAX_EPUB_UPLOAD_BYTES:-33554432}"
+      MAX_EPUB_ENTRIES: "${MAX_EPUB_ENTRIES:-2000}"
+      MAX_EPUB_UNCOMPRESSED_BYTES: "${MAX_EPUB_UNCOMPRESSED_BYTES:-134217728}"
       HOSTNAME: "0.0.0.0"
       PORT: "48217"
       JOBS_DIR: "/data/jobs"
       LIBRARY_DIR: "/data/library"
       ENTITLEMENTS_DIR: "/data/entitlements"
     volumes:
-      - quire-jobs:/data/jobs
-      - quire-library:/data/library
-      - quire-entitlements:/data/entitlements
+      - nativread-web-jobs:/data/jobs
+      - nativread-web-library:/data/library
+      - nativread-web-entitlements:/data/entitlements
 
 volumes:
-  quire-jobs:
-  quire-library:
-  quire-entitlements:
+  nativread-web-jobs:
+  nativread-web-library:
+  nativread-web-entitlements:

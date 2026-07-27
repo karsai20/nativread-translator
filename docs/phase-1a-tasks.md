@@ -81,7 +81,7 @@ Effort is labelled human / CC (agent) time. Status reflects the current code.
 - [ ] **1a-6 (abuse bounds, P1, ~1d / ~2h) — per-account/day rate limit + word cap + free-chapter dedup.**
   Login required (1a-1). One free chapter per `(userId, sourceHash)`; reject repeats;
   cap the translated chapter's word count; per-account/day request limit.
-- [ ] **1a-7 (T5, P1, ~1d / ~2h) — public upload hardening.**
+- [x] **1a-7 (T5, P1, ~1d / ~2h) — public upload hardening.**
   Reject a request body over N MB before buffering; cap entry count and total
   uncompressed size (zip-bomb guard); keep the existing zip-slip path normalization.
   Files: `app/api/upload/route.ts`, `lib/core/epub.ts`.

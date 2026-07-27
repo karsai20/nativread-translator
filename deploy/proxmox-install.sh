@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 # ===========================================================================
-# quire-translator — one-shot Proxmox installer (Next.js standalone on Node).
+# nativread-web — one-shot Proxmox installer (Next.js standalone on Node).
 #
 # Paste into the PROXMOX HOST shell (as root). Creates an unprivileged Debian LXC,
 # installs Node, clones the app from GitHub, builds it, and runs the Next.js standalone
 # server as a systemd service on an uncommon port. The household library + job state
-# persist under /opt/quire-translator/data.
+# persist under /opt/nativread-web/data.
 #
 # The repo is PRIVATE — provide a GitHub token with `repo` scope via GH_TOKEN:
 #
 #   GH_TOKEN=ghp_xxx CTID=150 PORT=48217 TRANSLATION_PROVIDER=openai PROVIDER_API_KEY=sk-... PROVIDER_MODEL=... \
 #     bash -c "$(curl -fsSL -H 'Authorization: token ghp_xxx' \
-#       https://raw.githubusercontent.com/karsai20/quire-translator/main/deploy/proxmox-install.sh)"
+#       https://raw.githubusercontent.com/karsai20/nativread-translator/main/deploy/proxmox-install.sh)"
 # ===========================================================================
 set -euo pipefail
 
 # ---- Tunables ----
-GH_REPO="${GH_REPO:-karsai20/quire-translator}"
+GH_REPO="${GH_REPO:-karsai20/nativread-translator}"
 BRANCH="${BRANCH:-main}"
 GH_TOKEN="${GH_TOKEN:-}"
 
 CTID="${CTID:-150}"
-CT_HOSTNAME="${CT_HOSTNAME:-quire-translator}"
+CT_HOSTNAME="${CT_HOSTNAME:-nativread-web}"
 PORT="${PORT:-48217}"
 CORES="${CORES:-2}"
 MEMORY_MB="${MEMORY_MB:-2048}"
@@ -45,7 +45,7 @@ TRANSLATION_REFINE_SELECTIVE="${TRANSLATION_REFINE_SELECTIVE:-1}"
 TRANSLATION_REASONER_HARD="${TRANSLATION_REASONER_HARD:-1}"
 TRANSLATION_PRECISION="${TRANSLATION_PRECISION:-balanced}"
 TRANSLATION_CONCURRENCY="${TRANSLATION_CONCURRENCY:-4}"
-APP_DST="/opt/quire-translator"
+APP_DST="/opt/nativread-web"
 
 log() { echo -e "\033[1;36m==>\033[0m $*"; }
 [ -z "$GH_TOKEN" ] && echo "WARNING: GH_TOKEN empty; clone of the private repo will fail." >&2
@@ -129,16 +129,16 @@ pct exec "$CTID" -- bash -lc "
 log "Installing + starting systemd service"
 pct exec "$CTID" -- bash -lc "
   set -e
-  cp $APP_DST/deploy/quire-translator.service /etc/systemd/system/quire-translator.service
+  cp $APP_DST/deploy/nativread-web.service /etc/systemd/system/nativread-web.service
   systemctl daemon-reload
-  systemctl enable quire-translator
-  systemctl restart quire-translator
+  systemctl enable nativread-web
+  systemctl restart nativread-web
   sleep 2
-  systemctl --no-pager status quire-translator | head -n 10 || true
+  systemctl --no-pager status nativread-web | head -n 10 || true
 "
 
 IP=$(pct exec "$CTID" -- bash -lc "hostname -I | awk '{print \$1}'" 2>/dev/null || echo "<container-ip>")
 echo
-log "Done. quire-translator is live at:  http://${IP}:${PORT}"
-echo "    Logs:    pct exec $CTID -- journalctl -u quire-translator -f"
-echo "    Update:  pct exec $CTID -- bash -lc 'cd $APP_DST && git pull && npm install && npm run build && cp -r .next/static .next/standalone/.next/static && systemctl restart quire-translator'"
+log "Done. nativread-web is live at:  http://${IP}:${PORT}"
+echo "    Logs:    pct exec $CTID -- journalctl -u nativread-web -f"
+echo "    Update:  pct exec $CTID -- bash -lc 'cd $APP_DST && git pull && npm install && npm run build && cp -r .next/static .next/standalone/.next/static && systemctl restart nativread-web'"

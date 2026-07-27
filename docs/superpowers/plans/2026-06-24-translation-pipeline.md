@@ -871,7 +871,7 @@ import type { Translator, TranslateChunkInput } from "../lib/core/translator.ts"
 import { buildFixtureEpub } from "./helpers/epub-fixture.ts";
 
 test("one failing chunk does not abort the whole book; others are cached", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "quire-fail-"));
+  const dir = mkdtempSync(join(tmpdir(), "nativread-fail-"));
   const fake = new FakeTranslator();
   let calls = 0;
   // Fail the very first translateChunk call, succeed afterwards.
