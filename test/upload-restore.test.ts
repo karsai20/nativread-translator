@@ -17,7 +17,7 @@ import { hashSource } from "../lib/core/library.ts";
 let root: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "quire-upload-"));
+  root = mkdtempSync(join(tmpdir(), "nativread-upload-"));
   process.env.JOBS_DIR = join(root, "jobs");
   process.env.LIBRARY_DIR = join(root, "library");
   process.env.ENTITLEMENTS_DIR = join(root, "entitlements");
@@ -37,6 +37,17 @@ function uploadRequest(userId: string, bytes: Uint8Array): Request {
     method: "POST",
     headers: { "x-nativread-user-id": userId },
     body: form,
+  });
+}
+
+function rawUploadRequest(userId: string, bytes: Uint8Array): Request {
+  return new Request("http://test/api/upload", {
+    method: "POST",
+    headers: {
+      "x-nativread-user-id": userId,
+      "content-type": "application/epub+zip",
+    },
+    body: bytes as BodyInit,
   });
 }
 
@@ -61,6 +72,14 @@ test("re-upload after purchase reports the entitled language — the restore pat
 test("upload without purchase reports no entitlements", async () => {
   const res = await (await uploadPost(uploadRequest("user-a", buildFixtureEpub()))).json();
   expect(res.entitledLanguages).toEqual([]);
+});
+
+test("raw EPUB upload avoids multipart copies while keeping the same contract", async () => {
+  const response = await uploadPost(rawUploadRequest("user-a", buildFixtureEpub()));
+  expect(response.status).toBe(200);
+  const body = await response.json() as { id?: string; quote?: { requiredCredits?: number } };
+  expect(body.id).toBeString();
+  expect(body.quote?.requiredCredits).toBeNumber();
 });
 
 test("invalid EPUB emits the import-failed funnel bucket", async () => {

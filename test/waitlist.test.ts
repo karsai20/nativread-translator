@@ -12,7 +12,7 @@ let root: string;
 let jobsDir: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "quire-waitlist-"));
+  root = mkdtempSync(join(tmpdir(), "nativread-waitlist-"));
   jobsDir = join(root, "jobs");
   process.env.JOBS_DIR = jobsDir;
   process.env.LIBRARY_DIR = join(root, "library");

@@ -20,7 +20,7 @@ let jobsDir: string;
 let libraryDir: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "quire-iso-"));
+  root = mkdtempSync(join(tmpdir(), "nativread-iso-"));
   jobsDir = join(root, "jobs");
   libraryDir = join(root, "library");
   mkdirSync(jobsDir, { recursive: true });

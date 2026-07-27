@@ -17,7 +17,7 @@ let jobsDir: string;
 let libraryDir: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "quire-account-"));
+  root = mkdtempSync(join(tmpdir(), "nativread-account-"));
   jobsDir = join(root, "jobs");
   libraryDir = join(root, "library");
   mkdirSync(jobsDir, { recursive: true });

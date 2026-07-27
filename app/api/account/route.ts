@@ -14,6 +14,12 @@ import { listJobs, deleteJob } from "@/lib/server/jobs";
 import { listLibrary } from "@/lib/core/library";
 import { eventsPath } from "@/lib/server/events";
 import type { TranslationEntitlement } from "@/lib/server/entitlements";
+import {
+  deleteUserCreditData,
+  userCreditData,
+} from "@/lib/server/credits";
+import { oidcProvidersFromConfig, verifyIdToken } from "@/lib/server/oidc";
+import { revokeAppleAuthorizationCode } from "@/lib/server/apple-oauth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -72,14 +78,68 @@ export async function GET(req: Request): Promise<Response> {
   const waitlist = userWaitlistRows(config, ctx.userId).map(
     (f) => f.split(".").slice(1, -1).join("."),
   );
+  const credits = userCreditData(config, ctx.userId);
 
-  return Response.json({ userId: ctx.userId, jobs, library, entitlements, waitlist });
+  return Response.json({ userId: ctx.userId, jobs, library, entitlements, credits, waitlist });
 }
 
 export async function DELETE(req: Request): Promise<Response> {
   const config = loadConfig();
   const ctx = await requestContext(req, config);
   if (ctx instanceof Response) return ctx;
+
+  // Apple requires apps that use Sign in with Apple to revoke the user's
+  // authorization when the account is deleted. Require a fresh Apple
+  // authorization code and matching id-token before erasing anything. This
+  // both confirms the destructive action and gives the server a one-time code
+  // it can exchange for the refresh token that must be revoked.
+  if (ctx.userId.startsWith("apple:")) {
+    const body = (await req.json().catch(() => ({}))) as {
+      appleIdentityToken?: unknown;
+      appleAuthorizationCode?: unknown;
+    };
+    if (
+      typeof body.appleIdentityToken !== "string"
+      || typeof body.appleAuthorizationCode !== "string"
+      || !body.appleAuthorizationCode
+    ) {
+      return Response.json(
+        { error: "Confirm account deletion with Sign in with Apple." },
+        { status: 400 },
+      );
+    }
+
+    const appleProviders = oidcProvidersFromConfig(config).filter(
+      (provider) => provider.name === "apple",
+    );
+    const identity = await verifyIdToken(body.appleIdentityToken, appleProviders);
+    if (!identity || identity.userId !== ctx.userId) {
+      return Response.json(
+        { error: "Apple confirmation does not match this account." },
+        { status: 403 },
+      );
+    }
+    if (!config.appleTeamId || !config.appleKeyId || !config.applePrivateKey) {
+      return Response.json(
+        { error: "Apple account deletion is temporarily unavailable." },
+        { status: 503 },
+      );
+    }
+
+    try {
+      await revokeAppleAuthorizationCode(body.appleAuthorizationCode, {
+        clientId: identity.audience,
+        teamId: config.appleTeamId,
+        keyId: config.appleKeyId,
+        privateKey: config.applePrivateKey,
+      });
+    } catch {
+      return Response.json(
+        { error: "Could not revoke Sign in with Apple. Please try again." },
+        { status: 502 },
+      );
+    }
+  }
 
   // Jobs (cancels a running one) + their same-id library copies.
   const jobs = listJobs(config).filter((j) => j.userId === ctx.userId);
@@ -108,6 +168,7 @@ export async function DELETE(req: Request): Promise<Response> {
       }
     }
   }
+  deleteUserCreditData(config, ctx.userId);
 
   // Waitlist rows.
   const waitlistDir = join(config.jobsDir, "waitlist");

@@ -13,11 +13,8 @@
 //   4. Hostile EPUB path-traversal→ §8 "EPUB = hostile zip … path-traversal rejection" (T5).
 //   5. Moderation-trip fixture    → §8 "submit a moderation-trip fixture (refusal branch fires)" (E3).
 //
-// Deferred (tracked, NOT yet built — see docs/phase-1a-tasks.md 1a-5/1a-6/1a-7):
-// the per-user/day rate limit + global spend kill-switch (T4) and the EPUB
-// decompression-bomb size/entry-count caps (T5's other half). Those are their
-// own P1 tasks, not test-suite side effects; the zip-bomb cap is signposted
-// below as a `test.todo` so the gap stays loud without failing CI.
+// The per-user/day rate limit + global spend kill-switch (T4) remain separate
+// P1 tasks. EPUB request/archive caps are attacked directly in probe 4b.
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs";
@@ -47,6 +44,9 @@ const OVERRIDES = [
   "NATIVREAD_BACKEND_SHARED_SECRET",
   "STOREKIT_ALLOW_UNSIGNED_GRANTS",
   "REQUIRE_TRANSLATION_ENTITLEMENTS",
+  "MAX_EPUB_UPLOAD_BYTES",
+  "MAX_EPUB_ENTRIES",
+  "MAX_EPUB_UNCOMPRESSED_BYTES",
 ] as const;
 
 let root: string;
@@ -54,7 +54,7 @@ let jobsDir: string;
 let libraryDir: string;
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "quire-abuse-"));
+  root = mkdtempSync(join(tmpdir(), "nativread-abuse-"));
   jobsDir = join(root, "jobs");
   libraryDir = join(root, "library");
   mkdirSync(jobsDir, { recursive: true });
@@ -220,10 +220,44 @@ test("probe 4: a zip-slip EPUB cannot escape the archive root", async () => {
   }
 });
 
-// Deferred half of T5 (docs/phase-1a-tasks.md 1a-7): reject oversized bodies
-// before buffering + cap entry count and total uncompressed size (zip bomb).
-// Not built yet; signposted so the gap is visible without failing CI.
-test.todo("probe 4b: a decompression-bomb EPUB over the size/entry caps is rejected (T5 caps — 1a-7, unbuilt)");
+// ── Probe 4b ── §8 "EPUB = hostile zip … hard size/entry caps." ─────────────
+// The central directory must be checked before decompression, and the request
+// stream itself must stop before an oversized multipart body is fully buffered.
+test("probe 4b: oversized and decompression-bomb EPUBs are rejected before unzip", async () => {
+  const fixture = buildFixtureEpub();
+  expect(
+    () => parseEpub(fixture, {
+      maxArchiveBytes: fixture.byteLength + 1,
+      maxEntries: 1,
+      maxUncompressedBytes: 1024 * 1024,
+    }),
+    "ABUSE ACCEPTED: an EPUB exceeded the central-directory entry cap",
+  ).toThrow(/entries/);
+
+  const compressedBomb = zipSync({
+    "payload.txt": strToU8("A".repeat(20_000)),
+  });
+  expect(
+    () => parseEpub(compressedBomb, {
+      maxArchiveBytes: compressedBomb.byteLength + 1,
+      maxEntries: 10,
+      maxUncompressedBytes: 1_024,
+    }),
+    "ABUSE ACCEPTED: a highly-compressed payload exceeded the expanded-size cap",
+  ).toThrow(/expands beyond/);
+
+  process.env.MAX_EPUB_UPLOAD_BYTES = "1024";
+  const body = new FormData();
+  body.set("epub", new File([new Uint8Array(70 * 1024)], "oversized.epub"));
+  const response = await uploadPost(asUser("https://x/api/upload", "user-a", {
+    method: "POST",
+    body,
+  }));
+  expect(
+    response.status,
+    "ABUSE ACCEPTED: oversized multipart upload crossed the bounded request stream",
+  ).toBe(413);
+});
 
 // ── Probe 5 ── §8 "submit a moderation-trip fixture (refusal branch fires)" (E3).
 // A provider that refuses on content grounds must end the job in the distinct
