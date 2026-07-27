@@ -5,6 +5,9 @@
   "compatibility_date": "2026-07-22",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  // Every uploaded version would otherwise get its own public URL. This API
+  // serves personal data, so only the deployed version may be reachable.
+  "preview_urls": false,
   "minify": true,
   "vars": {
     "ENVIRONMENT": "production",
@@ -95,7 +98,10 @@
       "image_build_context": "..",
       "max_instances": 6,
       "instance_type": "basic",
-      "scheduling_policy": "regional",
+      // "regional" was rejected by the API (only "default" and "fill_metals"
+      // are accepted). Placement stays in the EU through `constraints` below,
+      // which the scheduling policy does not override.
+      "scheduling_policy": "default",
       "constraints": {
         "jurisdiction": "eu",
         "regions": ["EEUR", "WEUR"]
