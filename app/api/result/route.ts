@@ -6,8 +6,9 @@ import { parseEpub } from "@/lib/core/epub";
 import { libraryEpubPath, getLibraryEntry } from "@/lib/core/library";
 import { readManifest } from "@/lib/core/job";
 import { loadConfig } from "@/lib/server/config";
-import { jobDirFor, isValidJobId } from "@/lib/server/jobs";
+import { deleteJob, jobDirFor, isValidJobId } from "@/lib/server/jobs";
 import { requestContext } from "@/lib/server/request-context";
+import { settleCreditReservation } from "@/lib/server/credits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,12 +53,29 @@ export async function GET(req: Request): Promise<Response> {
   const translatedBytes = readFileSync(translatedPath);
 
   if (url.searchParams.get("download") === "1") {
-    return new Response(new Uint8Array(translatedBytes), {
+    const response = new Response(new Uint8Array(translatedBytes), {
       headers: {
         "content-type": "application/epub+zip",
         "content-disposition": `attachment; filename="forditas-${id}.epub"`,
+        "cache-control": "private, no-store, max-age=0",
+        "x-content-type-options": "nosniff",
       },
     });
+
+    if (url.searchParams.get("consume") === "1") {
+      // The response owns an in-memory copy now, so the source EPUB, chunk
+      // cache and translated server copy can be removed before the bytes leave
+      // the process. A library entry is deleted only when its metadata proves
+      // that it belongs to this same caller (fail closed on corrupt/conflicting
+      // metadata). The privacy tradeoff is deliberate: after a failed transfer
+      // the user may need to re-upload, but book files are not retained merely
+      // for convenience.
+      const mayDeleteLibrary = libraryEntry?.userId === ctx.userId;
+      settleCreditReservation(config, id, "finalized");
+      deleteJob(config, id, mayDeleteLibrary);
+    }
+
+    return response;
   }
 
   const translated = parseEpub(new Uint8Array(translatedBytes));
