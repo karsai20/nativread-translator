@@ -23,6 +23,7 @@ export interface OidcProvider {
 export interface VerifiedIdentity {
   userId: string;
   provider: string;
+  audience: string;
 }
 
 const APPLE = {
@@ -99,7 +100,15 @@ export async function verifyIdToken(
         algorithms: ["RS256"],
       });
       if (typeof payload.sub === "string" && payload.sub.length > 0) {
-        return { userId: `${provider.name}:${payload.sub}`, provider: provider.name };
+        const audience = typeof payload.aud === "string"
+          ? payload.aud
+          : payload.aud?.find((value) => provider.audiences.includes(value));
+        if (!audience) continue;
+        return {
+          userId: `${provider.name}:${payload.sub}`,
+          provider: provider.name,
+          audience,
+        };
       }
     } catch {
       // Wrong signature / issuer / audience / expiry for this provider; the

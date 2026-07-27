@@ -8,10 +8,14 @@
 import { DeepSeekTranslator } from "@/lib/core/providers/deepseek";
 import { FakeTranslator } from "@/lib/core/providers/fake";
 import { OpenAICompatibleTranslator } from "@/lib/core/providers/openai-compatible";
+import { DEFAULT_EPUB_ARCHIVE_LIMITS } from "@/lib/core/epub";
 import type { Translator } from "@/lib/core/translator";
 import type { PrecisionMode } from "@/lib/core/quality/route";
 
 export type ProviderName = "fake" | "openai" | "gemini" | "deepseek";
+
+const PUBLIC_ARTIFACT_RETENTION_HOURS = 24;
+const MAX_PUBLIC_ARTIFACT_RETENTION_HOURS = 30 * 24;
 
 export interface ServerConfig {
   jobsDir: string;
@@ -28,11 +32,22 @@ export interface ServerConfig {
   reasonerForHard: boolean;
   precision: PrecisionMode;
   concurrency: number;
+  maxEpubUploadBytes: number;
+  maxEpubEntries: number;
+  maxEpubUncompressedBytes: number;
   mobileSharedSecret?: string;
   /** Sign in with Apple client/bundle ids accepted as id-token `aud`. */
   appleClientIds?: string[];
+  /** Server credentials used only to revoke Apple authorization on deletion. */
+  appleTeamId?: string;
+  appleKeyId?: string;
+  applePrivateKey?: string;
   /** Google OAuth client ids accepted as id-token `aud`. */
   googleClientIds?: string[];
+  /** HMAC secret for the backend session minted after Sign in with Apple. */
+  sessionSecret?: string;
+  /** Public-mode lifetime for source/result artifacts; 0 disables the sweep. */
+  artifactRetentionHours: number;
   requireFullTranslationEntitlements: boolean;
   allowUnsignedStoreKitGrants: boolean;
 }
@@ -83,9 +98,28 @@ function providerBaseUrl(provider: ProviderName): string | undefined {
   return undefined;
 }
 
+function positiveIntegerEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
 export function loadConfig(): ServerConfig {
   const providerName = inferProvider();
   const apiKey = providerApiKey(providerName);
+  const appleClientIds = csvEnv("APPLE_CLIENT_IDS");
+  const googleClientIds = csvEnv("GOOGLE_CLIENT_IDS");
+  const publicMode = Boolean(appleClientIds?.length || googleClientIds?.length);
+  const configuredRetention = Number(process.env.ARTIFACT_RETENTION_HOURS);
+  const artifactRetentionHours = publicMode
+    ? Math.min(
+        Number.isFinite(configuredRetention) && configuredRetention > 0
+          ? configuredRetention
+          : PUBLIC_ARTIFACT_RETENTION_HOURS,
+        MAX_PUBLIC_ARTIFACT_RETENTION_HOURS,
+      )
+    : Number.isFinite(configuredRetention) && configuredRetention >= 0
+      ? configuredRetention
+      : 0;
   const rawPrecision = (process.env.TRANSLATION_PRECISION ?? "balanced").trim();
   const precision: PrecisionMode =
     rawPrecision === "fidelity" || rawPrecision === "natural" ? rawPrecision : "balanced";
@@ -109,9 +143,26 @@ export function loadConfig(): ServerConfig {
     precision,
     // Chapters translated in parallel. Clamped to a sane range to avoid rate-limit storms.
     concurrency: Math.min(8, Math.max(1, Number(process.env.TRANSLATION_CONCURRENCY) || 4)),
+    maxEpubUploadBytes: positiveIntegerEnv(
+      "MAX_EPUB_UPLOAD_BYTES",
+      DEFAULT_EPUB_ARCHIVE_LIMITS.maxArchiveBytes,
+    ),
+    maxEpubEntries: positiveIntegerEnv(
+      "MAX_EPUB_ENTRIES",
+      DEFAULT_EPUB_ARCHIVE_LIMITS.maxEntries,
+    ),
+    maxEpubUncompressedBytes: positiveIntegerEnv(
+      "MAX_EPUB_UNCOMPRESSED_BYTES",
+      DEFAULT_EPUB_ARCHIVE_LIMITS.maxUncompressedBytes,
+    ),
     mobileSharedSecret: process.env.NATIVREAD_BACKEND_SHARED_SECRET?.trim() || undefined,
-    appleClientIds: csvEnv("APPLE_CLIENT_IDS"),
-    googleClientIds: csvEnv("GOOGLE_CLIENT_IDS"),
+    appleClientIds,
+    appleTeamId: process.env.APPLE_TEAM_ID?.trim() || undefined,
+    appleKeyId: process.env.APPLE_KEY_ID?.trim() || undefined,
+    applePrivateKey: process.env.APPLE_PRIVATE_KEY?.trim() || undefined,
+    googleClientIds,
+    sessionSecret: process.env.NATIVREAD_SESSION_SECRET?.trim() || undefined,
+    artifactRetentionHours,
     requireFullTranslationEntitlements: (process.env.REQUIRE_TRANSLATION_ENTITLEMENTS ?? "0") === "1",
     allowUnsignedStoreKitGrants: (process.env.STOREKIT_ALLOW_UNSIGNED_GRANTS ?? "0") === "1",
   };

@@ -1,5 +1,6 @@
 import type { ServerConfig } from "./config";
 import { oidcProvidersFromConfig, verifyIdToken, type OidcProvider } from "./oidc";
+import { verifySessionToken } from "./session";
 
 export interface RequestContext {
   userId: string;
@@ -7,7 +8,7 @@ export interface RequestContext {
 
 const USER_ID_RE = /^[A-Za-z0-9._:@-]{1,128}$/;
 
-function bearerToken(req: Request): string | undefined {
+export function bearerToken(req: Request): string | undefined {
   const auth = req.headers.get("authorization")?.trim();
   if (!auth?.toLowerCase().startsWith("bearer ")) return undefined;
   return auth.slice("bearer ".length).trim();
@@ -15,7 +16,7 @@ function bearerToken(req: Request): string | undefined {
 
 type RequestContextConfig = Pick<
   ServerConfig,
-  "mobileSharedSecret" | "appleClientIds" | "googleClientIds"
+  "mobileSharedSecret" | "appleClientIds" | "googleClientIds" | "sessionSecret"
 >;
 
 /**
@@ -44,6 +45,10 @@ export async function requestContext(
   if (oidcProviders.length > 0) {
     const token = bearerToken(req);
     if (!token) return Response.json({ error: "Unauthorized." }, { status: 401 });
+    if (config.sessionSecret) {
+      const sessionUserId = await verifySessionToken(token, config.sessionSecret);
+      if (sessionUserId) return { userId: sessionUserId };
+    }
     const identity = await verifyIdToken(token, oidcProviders);
     if (!identity) return Response.json({ error: "Unauthorized." }, { status: 401 });
     return { userId: identity.userId };

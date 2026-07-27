@@ -8,15 +8,13 @@ import { runJob, readManifest, setManifestStatus, type JobState } from "@/lib/co
 import type { PrecisionMode } from "@/lib/core/quality/route";
 import { createProvider, type ServerConfig } from "./config";
 import { appendEvent } from "./events";
+import { settleCreditReservation } from "./credits";
 
 type ControlSignal = "pause" | "cancel";
 
 const states = new Map<string, JobState>();
 const running = new Set<string>();
 const controls = new Map<string, ControlSignal>();
-
-/** Fraction of a book translated in "sample" (preview) mode. */
-export const SAMPLE_FRACTION = 0.01;
 
 // Job ids are opaque UUIDs (crypto.randomUUID at upload). Anything else is rejected
 // before it can reach a filesystem path — a malicious id like "../../etc" must never
@@ -106,7 +104,7 @@ export function startJob(
     precision,
     concurrency: config.concurrency,
     libraryDir: config.libraryDir,
-    ...(sample ? { sampleFraction: SAMPLE_FRACTION } : {}),
+    ...(sample ? { sample: true } : {}),
     onProgress: cacheState,
     shouldStop: () => controls.get(id), // peek; cleared in finally
   })
@@ -121,9 +119,19 @@ export function startJob(
           detail: `refusedChunks=${final.refusedChunks ?? 0}`,
         });
       }
+      if (final?.status === "error" || final?.status === "cancelled") {
+        settleCreditReservation(config, id, "refunded");
+      }
     })
     .catch((err) => {
-      console.error(`[job ${id}] failed:`, err instanceof Error ? err.message : err);
+      settleCreditReservation(config, id, "refunded");
+      console.error(JSON.stringify({
+        event: "translation-job-failed",
+        jobId: id,
+        error: err instanceof Error
+          ? `${err.name}: ${err.message}`.slice(0, 400)
+          : "Unknown error",
+      }));
     })
     .finally(() => {
       running.delete(id);
@@ -153,6 +161,7 @@ export function cancelJob(config: ServerConfig, id: string): JobState | undefine
   }
   const next = setManifestStatus(jobDirFor(config, id), "cancelled");
   if (next) cacheState(next);
+  settleCreditReservation(config, id, "refunded");
   return next;
 }
 
@@ -160,6 +169,7 @@ export function cancelJob(config: ServerConfig, id: string): JobState | undefine
 export function deleteJob(config: ServerConfig, id: string, withLibrary = false): void {
   if (!isValidJobId(id)) throw new Error(`Invalid job id: ${id}`);
   if (running.has(id)) controls.set(id, "cancel");
+  settleCreditReservation(config, id, "refunded");
   states.delete(id);
   controls.delete(id);
   rmSync(jobDirFor(config, id), { recursive: true, force: true });

@@ -9,6 +9,7 @@ import {
 
 import { verifyIdToken, type OidcProvider } from "../lib/server/oidc.ts";
 import { requestContext } from "../lib/server/request-context.ts";
+import { createSessionToken } from "../lib/server/session.ts";
 
 const APPLE_ISS = "https://appleid.apple.com";
 const APPLE_AUD = "com.karsai.nativread";
@@ -64,7 +65,11 @@ test("verifyIdToken accepts a valid Apple id-token and namespaces the userId", a
 
   const identity = await verifyIdToken(token, [apple.provider]);
 
-  expect(identity).toEqual({ userId: "apple:000123.abcDEF.4567", provider: "apple" });
+  expect(identity).toEqual({
+    userId: "apple:000123.abcDEF.4567",
+    provider: "apple",
+    audience: APPLE_AUD,
+  });
 });
 
 test("verifyIdToken picks the right provider from a multi-provider list", async () => {
@@ -74,7 +79,11 @@ test("verifyIdToken picks the right provider from a multi-provider list", async 
 
   const identity = await verifyIdToken(token, [apple.provider, google.provider]);
 
-  expect(identity).toEqual({ userId: "google:9988776655", provider: "google" });
+  expect(identity).toEqual({
+    userId: "google:9988776655",
+    provider: "google",
+    audience: GOOGLE_AUD,
+  });
 });
 
 test("verifyIdToken rejects a wrong audience", async () => {
@@ -150,6 +159,19 @@ test("requestContext (public mode) ignores a spoofed user-id header", async () =
   );
 
   expect(res).toEqual({ userId: "apple:real-user" });
+});
+
+test("requestContext accepts a NativRead session after the Apple id-token exchange", async () => {
+  const apple = await makeFixture("apple", APPLE_ISS, APPLE_AUD);
+  const sessionSecret = "test-session-secret-that-is-longer-than-32-bytes";
+  const token = await createSessionToken("apple:returning-user", sessionSecret);
+  const res = await requestContext(
+    get({ authorization: `Bearer ${token}` }),
+    { sessionSecret },
+    { oidcProviders: [apple.provider] },
+  );
+
+  expect(res).toEqual({ userId: "apple:returning-user" });
 });
 
 test("requestContext (dev mode, no login configured) trusts the user-id header", async () => {
