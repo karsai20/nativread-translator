@@ -53,8 +53,8 @@ export function AppSidebar() {
           </span>
           {!collapsed && (
             <div className="min-w-0">
-              <p className="display truncate text-base font-semibold leading-tight">Verzió</p>
-              <p className="truncate text-xs text-muted-foreground">fordítóműhely</p>
+              <p className="display truncate text-base font-semibold leading-tight">NativRead</p>
+              <p className="truncate text-xs text-muted-foreground">Web</p>
             </div>
           )}
           <button

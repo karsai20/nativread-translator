@@ -16,7 +16,7 @@ export default function OverviewPage() {
     <>
       <DashboardHeader
         title="Áttekintés"
-        subtitle="A fordítóműhely élő állapota"
+        subtitle="A NativRead Web élő állapota"
         action={<UploadDialog onStarted={jobsState.refresh} />}
       />
 

@@ -127,7 +127,7 @@ export default function SettingsPage() {
           <Row icon={Gauge} label="Párhuzamosság" description="Egyszerre futó fordítási szakaszok száma.">
             <span className={value}>{settings ? `${settings.concurrency} worker` : "…"}</span>
           </Row>
-          <Row icon={Boxes} label="Runtime profil" description="Webes műhely vagy NativRead mobil backend konténer.">
+          <Row icon={Boxes} label="Runtime profil" description="NativRead Web vagy NativRead mobil backend konténer.">
             <span className={`${value} uppercase`}>{settings?.appProfile ?? "…"}</span>
           </Row>
           <Row icon={CheckCircle2} label="Ajánlott MVP modell" description="Az alap cost/quality választás könyvfordításhoz.">

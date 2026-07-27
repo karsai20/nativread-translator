@@ -74,7 +74,7 @@ export default function ReadPage({ params }: { params: Promise<{ id: string }> }
               <div className="mb-6 flex items-start gap-3 rounded-[var(--radius)] border border-primary/40 bg-accent/40 px-4 py-3">
                 <FlaskConical className="mt-0.5 size-4 shrink-0 text-primary" />
                 <p className="text-sm text-card-foreground">
-                  <span className="font-medium">Próbafordítás — csak az első 5%.</span>{" "}
+                  <span className="font-medium">Próbafordítás — az első tartalmi fejezet.</span>{" "}
                   Csak a könyv eleje lett lefordítva, a többi eredeti nyelven maradt. A teljes
                   fordításhoz{" "}
                   <Link href="/" className="font-medium underline underline-offset-2">

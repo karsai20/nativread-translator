@@ -19,8 +19,9 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Verzió — fordítóműhely",
-  description: "Helyi könyvfordító műhely. Tölts fel egy könyvet, és kövesd a fordítás állapotát.",
+  applicationName: "NativRead Web",
+  title: "NativRead Web — könyvfordító",
+  description: "Tölts fel egy könyvet, kövesd a fordítást, majd olvasd vagy töltsd le magyarul.",
 };
 
 // Without this, mobile browsers render the page at a ~980px desktop width and shrink it,

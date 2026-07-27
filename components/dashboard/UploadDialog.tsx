@@ -105,7 +105,7 @@ export function UploadDialog({ onStarted }: UploadDialogProps) {
       });
       if (!tr.ok) throw new Error(((await tr.json()) as { error?: string }).error ?? "A fordítás nem indult el.");
 
-      toast.success(sample ? "A próbafordítás (első 5%) elindult." : "A fordítás elindult.");
+      toast.success(sample ? "Az első fejezet próbafordítása elindult." : "A fordítás elindult.");
       setOpen(false);
       reset();
       onStarted?.();
@@ -209,7 +209,7 @@ export function UploadDialog({ onStarted }: UploadDialogProps) {
             {sample ? <span className="text-xs leading-none">✓</span> : null}
           </span>
           <span className="min-w-0">
-            <span className="block text-sm font-medium">Csak az első 5% (próbafordítás)</span>
+            <span className="block text-sm font-medium">Első tartalmi fejezet (próbafordítás)</span>
             <span className="block text-sm text-muted-foreground">
               Olcsó minta a minőség ellenőrzéséhez, mielőtt az egész könyvet lefordítanád. A többi rész eredeti nyelven marad.
             </span>

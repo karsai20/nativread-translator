@@ -47,8 +47,8 @@ export function LibraryTable({ books, onDelete }: LibraryTableProps) {
                 >
                   <span className="truncate">{book.title}</span>
                   {book.sample && (
-                    <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground" title="Csak az első 5% lett lefordítva">
-                      Próba · 5%
+                    <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-xs font-medium text-accent-foreground" title="Az első tartalmi fejezet lett lefordítva">
+                      Fejezetpróba
                     </span>
                   )}
                 </Link>
