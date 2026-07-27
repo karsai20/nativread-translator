@@ -9,7 +9,7 @@
 // prefix mechanism, and layer it per the CoP's multi-layer guidance:
 //
 //   layer 1  <meta property="iptc:DigitalSourceType"> …/trainedAlgorithmicMedia
-//   layer 2  <dc:description id="nativbook-ai-marker"> human+machine sentence
+//   layer 2  <dc:description id="nativread-web-ai-marker"> human+machine sentence
 //   layer 3  colophon.xhtml appended to the spine (human-readable companion;
 //            survives OPF-stripping conversions such as Send-to-Kindle)
 //
@@ -26,8 +26,8 @@ import type { Epub } from "./epub";
 export const IPTC_PREFIX_DECL = "iptc: http://iptc.org/std/Iptc4xmpExt/2008-02-29/";
 export const DIGITAL_SOURCE_TYPE_URI =
   "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia";
-export const COLOPHON_HREF = "nativbook-colophon.xhtml";
-export const COLOPHON_ID = "nativbook-colophon";
+export const COLOPHON_HREF = "nativread-web-colophon.xhtml";
+export const COLOPHON_ID = "nativread-web-colophon";
 
 export interface AiMarkerOptions {
   /** BCP-47 source language tag, e.g. "en". */
@@ -52,14 +52,14 @@ function languageName(tag: string): string {
 export function markerSentence(opts: AiMarkerOptions): string {
   return (
     `AI-generated content: machine translation from ${languageName(opts.sourceLang)} ` +
-    `to ${languageName(opts.targetLang)} by NativBook (EU AI Act Art 50).`
+    `to ${languageName(opts.targetLang)} by NativRead Web (EU AI Act Art 50).`
   );
 }
 
 function colophonXhtml(opts: AiMarkerOptions, date: string): string {
   const hu =
     opts.targetLang === "hu"
-      ? "<p>Ezt a könyvet mesterséges intelligencia fordította a NativBook alkalmazásban, " +
+      ? "<p>Ezt a könyvet mesterséges intelligencia fordította a NativRead Web alkalmazásban, " +
         "a tulajdonos saját példányából. A fordítás géppel készült, hibákat tartalmazhat.</p>\n"
       : "";
   return (
@@ -68,10 +68,10 @@ function colophonXhtml(opts: AiMarkerOptions, date: string): string {
     '<html xmlns="http://www.w3.org/1999/xhtml">\n' +
     "<head><title>Colophon</title></head>\n" +
     "<body>\n" +
-    "<h2>AI translation by NativBook</h2>\n" +
+    "<h2>AI translation by NativRead Web</h2>\n" +
     hu +
     `<p>This book was machine-translated from ${languageName(opts.sourceLang)} to ` +
-    `${languageName(opts.targetLang)} by NativBook on ${date}. It is AI-generated ` +
+    `${languageName(opts.targetLang)} by NativRead Web on ${date}. It is AI-generated ` +
     "content under Article 50 of the EU AI Act and may contain translation errors. " +
     "The translation was made for the personal use of the book's owner.</p>\n" +
     "</body>\n" +
@@ -92,8 +92,8 @@ export function injectAiMarker(epub: Epub, opts: AiMarkerOptions): void {
   // Idempotent: a resumed/re-run delivery must not stack duplicate markers.
   // Keyed on OUR marker id, not the IPTC URI — a source EPUB that already
   // carries a publisher's trainedAlgorithmicMedia mark must still get the
-  // NativBook layers (description + colophon), or the Art 50 duty is unmet.
-  if (opf.includes('id="nativbook-ai-marker"')) return;
+  // NativRead Web layers (description + colophon), or the Art 50 duty is unmet.
+  if (opf.includes('id="nativread-web-ai-marker"')) return;
   const date = opts.date ?? new Date().toISOString().slice(0, 10);
 
   // 1. Declare the IPTC prefix on <package>. Append to an existing prefix
@@ -117,7 +117,7 @@ export function injectAiMarker(epub: Epub, opts: AiMarkerOptions): void {
   if (!/<\/metadata\s*>/.test(opf)) throw new Error("AI marker: OPF has no <metadata> block");
   const metadata =
     `    <meta property="iptc:DigitalSourceType">${DIGITAL_SOURCE_TYPE_URI}</meta>\n` +
-    `    <dc:description id="nativbook-ai-marker">${markerSentence(opts)}</dc:description>\n`;
+    `    <dc:description id="nativread-web-ai-marker">${markerSentence(opts)}</dc:description>\n`;
   opf = opf.replace(/<\/metadata\s*>/, `${metadata}  </metadata>`);
 
   // 3. Colophon page: manifest item + last spine itemref + the XHTML entry.

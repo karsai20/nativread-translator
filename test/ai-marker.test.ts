@@ -34,7 +34,7 @@ test("OPF carries the exact pinned marker spec", () => {
   );
 
   // Layer 2: dc: entry with the human+machine sentence.
-  expect(opf).toContain('<dc:description id="nativbook-ai-marker">');
+  expect(opf).toContain('<dc:description id="nativread-web-ai-marker">');
   expect(opf).toContain(markerSentence(OPTS));
 
   // Layer 3: colophon in manifest + spine.
@@ -46,7 +46,7 @@ test("colophon page ships and is human-readable in both languages", () => {
   const entries = unzipSync(markedEpubBytes());
   const colophon = strFromU8(entries[`OEBPS/${COLOPHON_HREF}`]!);
 
-  expect(colophon).toContain("AI translation by NativBook");
+  expect(colophon).toContain("AI translation by NativRead Web");
   expect(colophon).toContain("mesterséges intelligencia");
   expect(colophon).toContain("Article 50");
   expect(colophon).toContain("2026-07-09");
@@ -66,7 +66,7 @@ test("marked EPUB stays valid and the marker survives a re-zip round-trip", () =
   const roundTripped = parseEpub(writeEpub(reparsed, {}));
   const opf = strFromU8(roundTripped.entries["OEBPS/content.opf"]!);
   expect(opf).toContain(DIGITAL_SOURCE_TYPE_URI);
-  expect(roundTripped.spine.at(-1)!.content).toContain("AI translation by NativBook");
+  expect(roundTripped.spine.at(-1)!.content).toContain("AI translation by NativRead Web");
 
   // mimetype stays first and stored.
   const entries = unzipSync(writeEpub(roundTripped, {}));
@@ -139,7 +139,7 @@ test("a publisher's pre-existing trainedAlgorithmicMedia mark does not suppress 
   injectAiMarker(epub, OPTS);
 
   const marked = strFromU8(epub.entries["OEBPS/content.opf"]!);
-  expect(marked).toContain('id="nativbook-ai-marker"');
+  expect(marked).toContain('id="nativread-web-ai-marker"');
   expect(marked).toContain(`<itemref idref="${COLOPHON_ID}"/>`);
 });
 

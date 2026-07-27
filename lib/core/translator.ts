@@ -17,6 +17,8 @@
 //      left placeholder garbage is re-translated deterministically and, if still bad,
 //      fails the chunk (per-chunk isolation) rather than baking garbage into the book.
 
+import { parse } from "node-html-parser";
+
 import type { GlossaryMap } from "./glossary";
 import {
   stripInlineTags,
@@ -179,8 +181,8 @@ function addUsage(a: TokenUsage, b?: TokenUsage): TokenUsage {
 }
 
 function toPlainText(html: string): string {
-  return stripInlineTags(html)
-    .replace(/<[^>]+>/g, " ")
+  const withoutMarkup = stripInlineTags(html).replace(/<[^>]+>/g, " ");
+  return parse(withoutMarkup).text
     .replace(/\s+/g, " ")
     .trim();
 }

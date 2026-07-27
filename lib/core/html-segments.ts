@@ -80,19 +80,24 @@ function normalizeTranslatedCore(translated: string): string {
   return translated.replace(/^\s+/, "").replace(/\s+$/, "");
 }
 
+const HTML_TEXT_ESCAPE_RE = /[&<>]/gu;
+const HTML_TEXT_ESCAPES: Readonly<Record<string, string>> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+};
+
+/** Escapes only HTML text-node delimiters; quotes are not special here. */
 function escapeHtmlText(text: string): string {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return text.replace(HTML_TEXT_ESCAPE_RE, (character) => HTML_TEXT_ESCAPES[character]!);
 }
 
 export function protectHtmlTextNodes(html: string): ProtectedHtmlText {
-  const doc = parse(`<quire-block>${html}</quire-block>`, {
+  const doc = parse(`<nativread-block>${html}</nativread-block>`, {
     comment: true,
     voidTag: { closingSlash: true },
   });
-  const wrapper = doc.querySelector("quire-block") ?? doc;
+  const wrapper = doc.querySelector("nativread-block") ?? doc;
   const textNodes: TextNode[] = [];
   walkTextNodes(wrapper, textNodes);
 
@@ -116,7 +121,11 @@ export function protectHtmlTextNodes(html: string): ProtectedHtmlText {
     for (const ref of refs) {
       const translated = translations.get(ref.index);
       if (translated === undefined) continue;
-      ref.node.rawText = escapeHtmlText(`${ref.leading}${normalizeTranslatedCore(translated)}${ref.trailing}`);
+      // `rawText` is serialized as markup, so escape the provider response for
+      // text-node context while preserving literal Unicode in the EPUB.
+      ref.node.rawText = escapeHtmlText(
+        `${ref.leading}${normalizeTranslatedCore(translated)}${ref.trailing}`,
+      );
     }
     return wrapper.innerHTML;
   };

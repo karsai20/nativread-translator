@@ -16,6 +16,6 @@ export interface LibraryBook {
   words: number;
   costUsd: number;
   createdAt: string;
-  /** True for a 5% preview translation. */
+  /** True for a first-content-chapter preview translation. */
   sample?: boolean;
 }

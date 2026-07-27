@@ -7,7 +7,7 @@ import { saveToLibrary, listLibrary, findBySourceHash, getLibraryEntry, hashSour
 import { buildFixtureEpub } from "./helpers/epub-fixture.ts";
 
 function freshDir(): string {
-  return mkdtempSync(join(tmpdir(), "quire-lib-"));
+  return mkdtempSync(join(tmpdir(), "nativread-lib-"));
 }
 
 test("saves a book and lists it back", () => {

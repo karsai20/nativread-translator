@@ -19,7 +19,7 @@ class SpyTranslator implements Translator {
 }
 
 function freshJobDir(): string {
-  return mkdtempSync(join(tmpdir(), "quire-ctrl-"));
+  return mkdtempSync(join(tmpdir(), "nativread-ctrl-"));
 }
 
 // shouldStop is polled at the TOP of the loop before each chunk. With 2 chunks,

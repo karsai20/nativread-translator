@@ -2,13 +2,14 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runJob } from "../lib/core/job.ts";
+import { runJob, takeFirstContentChapter } from "../lib/core/job.ts";
+import type { Chunk } from "../lib/core/chunker.ts";
 import { parseEpub } from "../lib/core/epub.ts";
 import { FakeTranslator } from "../lib/core/providers/fake.ts";
 import { buildFixtureEpub } from "./helpers/epub-fixture.ts";
 
-test("sample mode translates only the leading fraction, leaving the rest original", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "quire-sample-"));
+test("sample mode translates only the first content chapter, leaving the rest original", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nativread-sample-"));
   const epubBytes = buildFixtureEpub(); // 2 chapters, 1 chunk each
 
   const state = await runJob({
@@ -16,11 +17,11 @@ test("sample mode translates only the leading fraction, leaving the rest origina
     epubBytes,
     provider: new FakeTranslator(),
     jobDir: dir,
-    sampleFraction: 0.05, // first 5% -> just the opening chunk
+    sample: true,
   });
 
   expect(state.status).toBe("done");
-  // Only the leading chunk is in scope, so total reflects the sample, not the whole book.
+  // Only the selected chapter is in scope, so total reflects the preview.
   expect(state.chunks.total).toBe(1);
   expect(state.chunks.done).toBe(1);
 
@@ -36,8 +37,29 @@ test("sample mode translates only the leading fraction, leaving the rest origina
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("no sampleFraction translates the whole book", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "quire-full-"));
+test("content preview skips short front matter", () => {
+  const chunk = (href: string, key: string, text: string): Chunk => ({
+    itemHref: href,
+    key,
+    blocks: [{ index: 0, innerHtml: text }],
+  });
+  const front = chunk("front.xhtml", "front#0", "Title Copyright Contents");
+  const chapter = chunk(
+    "chapter-1.xhtml",
+    "chapter-1#0",
+    Array.from({ length: 300 }, (_, index) => `word${index}`).join(" "),
+  );
+  const later = chunk(
+    "chapter-2.xhtml",
+    "chapter-2#0",
+    Array.from({ length: 300 }, (_, index) => `later${index}`).join(" "),
+  );
+
+  expect(takeFirstContentChapter([front, chapter, later])).toEqual([chapter]);
+});
+
+test("sample disabled translates the whole book", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "nativread-full-"));
   const state = await runJob({ id: "s2", epubBytes: buildFixtureEpub(), provider: new FakeTranslator(), jobDir: dir });
   expect(state.chunks.total).toBe(2);
 

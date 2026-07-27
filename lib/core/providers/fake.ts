@@ -15,7 +15,10 @@ import type {
 import { PLACEHOLDER_OPEN, PLACEHOLDER_CLOSE, BLOCK_MARKER_OPEN, BLOCK_MARKER_CLOSE } from "../markup";
 import { estimateTokens } from "../cost";
 
-export const FAKE_PREFIX = "hu ";
+// Accent-bearing, visibly synthetic marker: the blocking language guard should
+// accept placeholder output during an end-to-end dry run without confusing it
+// with a real literary translation.
+export const FAKE_PREFIX = "tesztfordítás: ";
 export const FAKE_REFINE_TAG = "+";
 
 // A "word" that contains any marker/token PUA char is preserved untouched.

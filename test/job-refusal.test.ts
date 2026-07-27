@@ -21,7 +21,7 @@ const refusing: Translator = {
 };
 
 test("a moderation refusal ends the job with the non-retry error class", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "quire-refusal-"));
+  const dir = mkdtempSync(join(tmpdir(), "nativread-refusal-"));
 
   const state = await runJob({
     id: "r1",
@@ -43,7 +43,7 @@ test("a moderation refusal ends the job with the non-retry error class", async (
 });
 
 test("transient failures keep the retryable copy and no errorCode", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "quire-transient-"));
+  const dir = mkdtempSync(join(tmpdir(), "nativread-transient-"));
   const flaky: Translator = {
     name: "flaky",
     async translateChunk() {

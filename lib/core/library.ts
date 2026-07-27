@@ -17,7 +17,7 @@ export interface LibraryEntry {
   words: number;
   costUsd: number;
   createdAt: string; // ISO
-  /** True for a 5% preview. Shown in the library but excluded from source-hash dedup. */
+  /** True for a chapter preview. Shown in the library but excluded from source-hash dedup. */
   sample?: boolean;
 }
 

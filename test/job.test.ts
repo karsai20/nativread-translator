@@ -22,7 +22,7 @@ class SpyTranslator implements Translator {
 }
 
 function freshJobDir(): string {
-  return mkdtempSync(join(tmpdir(), "quire-job-"));
+  return mkdtempSync(join(tmpdir(), "nativread-job-"));
 }
 
 test("full job translates the book and writes a valid EPUB", async () => {

@@ -38,6 +38,10 @@ export interface JobState {
   title?: string;
   userId?: string;
   sourceHash?: string;
+  /** Immutable server quote captured when the source EPUB was uploaded. */
+  sourceCharacters?: number;
+  requiredCredits?: number;
+  quoteVersion?: string;
   words: number;
   spineItemCount: number;
   chunks: { total: number; done: number };
@@ -61,7 +65,7 @@ export interface JobState {
   chunkDurationsMs?: number[];
   /** Effective parallel worker count, so ETA reflects parallelism (not sequential). */
   concurrency?: number;
-  /** True when only the leading fraction of the book was translated (cheap preview). */
+  /** True when only the first substantial content chapter was translated. */
   sample?: boolean;
   /** Quality mode used for this job. */
   precision?: PrecisionMode;
@@ -85,23 +89,50 @@ const TIMING_WINDOW = 20;
  */
 const DEFAULT_CONCURRENCY = 4;
 
+const SAMPLE_MIN_CONTENT_WORDS = 250;
+const SAMPLE_MAX_WORDS = 5_000;
+
+function chunkWordCount(chunk: Chunk): number {
+  const text = chunk.blocks
+    .map((block) => stripInlineTags(block.innerHtml).replace(/<[^>]+>/g, " "))
+    .join(" ");
+  return text.match(/\S+/g)?.length ?? 0;
+}
+
 /**
- * Keep the leading chunks whose cumulative source size covers `fraction` of the book.
- * Always keeps at least one chunk so a sample is never empty.
+ * Pick the first substantial spine item, skipping cover/title/copyright/TOC
+ * fragments, then keep that chapter up to a bounded word cap. The preview now
+ * ends at a natural reading boundary instead of an arbitrary percentage.
  */
-function takeLeadingFraction(chunks: Chunk[], fraction: number): Chunk[] {
-  const chars = chunks.map((c) => c.blocks.reduce((n, b) => n + b.innerHtml.length, 0));
-  const total = chars.reduce((a, b) => a + b, 0);
-  if (total === 0) return chunks.slice(0, 1);
-  const target = total * fraction;
-  const kept: Chunk[] = [];
-  let acc = 0;
-  for (let i = 0; i < chunks.length; i++) {
-    kept.push(chunks[i]!);
-    acc += chars[i]!;
-    if (acc >= target) break;
+export function takeFirstContentChapter(
+  chunks: Chunk[],
+  minContentWords = SAMPLE_MIN_CONTENT_WORDS,
+  maxWords = SAMPLE_MAX_WORDS,
+): Chunk[] {
+  if (chunks.length === 0) return [];
+
+  const chapters = new Map<string, Chunk[]>();
+  for (const chunk of chunks) {
+    const chapter = chapters.get(chunk.itemHref) ?? [];
+    chapter.push(chunk);
+    chapters.set(chunk.itemHref, chapter);
   }
-  return kept;
+
+  const ordered = [...chapters.values()];
+  const selected =
+    ordered.find((chapter) => chapter.reduce((sum, chunk) => sum + chunkWordCount(chunk), 0) >= minContentWords)
+    ?? ordered.find((chapter) => chapter.some((chunk) => chunkWordCount(chunk) > 0))
+    ?? ordered[0]!;
+
+  const kept: Chunk[] = [];
+  let words = 0;
+  for (const chunk of selected) {
+    const chunkWords = chunkWordCount(chunk);
+    if (kept.length > 0 && words + chunkWords > maxWords) break;
+    kept.push(chunk);
+    words += chunkWords;
+  }
+  return kept.length > 0 ? kept : selected.slice(0, 1);
 }
 
 export interface RunJobOptions {
@@ -118,12 +149,8 @@ export interface RunJobOptions {
   reasonerForHard?: boolean;
   /** Quality mode passed to the per-chunk pipeline. */
   precision?: PrecisionMode;
-  /**
-   * Translate only the leading `sampleFraction` (0–1) of the book — a cheap preview to
-   * judge translation quality before paying for the whole thing. The rest of the book is
-   * left as the original text. Resume-safe: chunk keys are unchanged.
-   */
-  sampleFraction?: number;
+  /** Translate the first substantial content chapter as a bounded preview. */
+  sample?: boolean;
   /** Chapters translated in parallel. Defaults to DEFAULT_CONCURRENCY. */
   concurrency?: number;
   /** If set, the finished book is saved into this household library dir. */
@@ -229,11 +256,10 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     fullChunks.push(...chunks);
   }
 
-  // Sample mode: translate only the leading fraction; the rest stays original. Chunks not
-  // in scope are simply never translated, so re-stitch leaves their blocks untouched.
-  const sampleFraction = opts.sampleFraction;
-  const isSample = typeof sampleFraction === "number" && sampleFraction > 0 && sampleFraction < 1;
-  const allChunks: Chunk[] = isSample ? takeLeadingFraction(fullChunks, sampleFraction) : fullChunks;
+  // Sample mode: translate the first real content chapter. Chunks outside the
+  // selected chapter remain original, so the output EPUB is still structurally complete.
+  const isSample = Boolean(opts.sample);
+  const allChunks: Chunk[] = isSample ? takeFirstContentChapter(fullChunks) : fullChunks;
   const precision = opts.precision ?? "balanced";
 
   const doneAtStart = allChunks.filter((c) => existsSync(chunkFilePath(jobDir, c.key))).length;
@@ -248,6 +274,13 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     title: epub.title,
     ...(prior?.userId ? { userId: prior.userId } : {}),
     sourceHash: prior?.sourceHash ?? hashSource(epubBytes),
+    ...(prior?.sourceCharacters !== undefined
+      ? { sourceCharacters: prior.sourceCharacters }
+      : {}),
+    ...(prior?.requiredCredits !== undefined
+      ? { requiredCredits: prior.requiredCredits }
+      : {}),
+    ...(prior?.quoteVersion ? { quoteVersion: prior.quoteVersion } : {}),
     words: countWords(epub),
     spineItemCount: epub.spine.length,
     chunks: { total: allChunks.length, done: doneAtStart },
@@ -316,12 +349,22 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
       // job can end with non-retry semantics instead of "try again" copy.
       if (err instanceof TranslationGuardError && err.reasons.some((r) => r.reason === "refusal")) {
         refusedChunks += 1;
-        console.error(
-          `[job ${id}] chunk ${chunk.key} REFUSED by provider (moderation):`,
-          err.reasons.map((r) => `#${r.index}:${r.reason}`).join(", "),
-        );
+        console.error(JSON.stringify({
+          event: "translation-chunk-refused",
+          jobId: id,
+          reasons: err.reasons.map((reason) => ({
+            index: reason.index,
+            reason: reason.reason,
+          })),
+        }));
       } else {
-        console.error(`[job ${id}] chunk ${chunk.key} failed:`, err instanceof Error ? err.message : err);
+        console.error(JSON.stringify({
+          event: "translation-chunk-failed",
+          jobId: id,
+          error: err instanceof Error
+            ? `${err.name}: ${err.message}`.slice(0, 400)
+            : "Unknown error",
+        }));
       }
       return undefined;
     }
