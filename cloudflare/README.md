@@ -28,12 +28,22 @@ Requirements: a paid Cloudflare Workers plan with Containers enabled, Docker,
 Wrangler authentication, and an App Store Services ID/bundle ID configured for
 Sign in with Apple.
 
-Current account state (2026-07-22): Wrangler is authenticated, the
-`nativread-production` D1 database was created in the EU and migration
-`0001_initial.sql`, `0002_terms_acceptances.sql`, and
-`0003_ai_budget_reservations.sql` were applied remotely. The remaining R2,
-Queue/DLQ, and Container resources require enabling the paid Workers/R2
-products first.
+Current account state (2026-07-27): everything below is provisioned and the
+Worker is deployed at `https://nativread-api.karsai777.workers.dev`. D1
+`nativread-production` (EU) has all three migrations applied; R2
+`nativread-artifacts` (EU) carries the `delete-expired-artifacts` lifecycle
+rule; `nativread-translation` and its DLQ exist with 14-day retention; the
+`nativread-translator` container application is created. All seven Worker
+secrets are set.
+
+`wrangler d1 list` reports `num_tables: 0` for this database even when the
+schema is present — that column is stale. Query `sqlite_master` instead.
+
+Verified so far: `GET /health`, the 401 boundary on authenticated routes, and
+the JSON 404. Apple login, a sample translation, result consumption, retention
+cleanup and account deletion are still unverified, so
+`NativReadDefaultTranslationBackendURL` in the iOS `project.yml` is
+deliberately still empty.
 
 ```bash
 bun install --frozen-lockfile
