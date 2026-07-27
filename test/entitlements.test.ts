@@ -22,13 +22,16 @@ function testConfig(entitlementsDir: string): ServerConfig {
     reasonerForHard: false,
     precision: "balanced",
     concurrency: 1,
+    maxEpubUploadBytes: 32 * 1024 * 1024,
+    maxEpubEntries: 2_000,
+    maxEpubUncompressedBytes: 128 * 1024 * 1024,
     requireFullTranslationEntitlements: true,
     allowUnsignedStoreKitGrants: true,
   };
 }
 
 test("translation entitlements are scoped by user, source hash and language", () => {
-  const dir = mkdtempSync(join(tmpdir(), "quire-entitlements-"));
+  const dir = mkdtempSync(join(tmpdir(), "nativread-entitlements-"));
   const config = testConfig(dir);
   const sourceHash = "a".repeat(64);
 
@@ -51,7 +54,7 @@ test("translation entitlements are scoped by user, source hash and language", ()
 });
 
 test("the same book can be bought per language without collision", () => {
-  const dir = mkdtempSync(join(tmpdir(), "quire-entitlements-"));
+  const dir = mkdtempSync(join(tmpdir(), "nativread-entitlements-"));
   const config = testConfig(dir);
   const sourceHash = "a".repeat(64);
 
@@ -78,7 +81,7 @@ test("the same book can be bought per language without collision", () => {
 });
 
 test("transaction ids are idempotent", () => {
-  const dir = mkdtempSync(join(tmpdir(), "quire-entitlements-"));
+  const dir = mkdtempSync(join(tmpdir(), "nativread-entitlements-"));
   const config = testConfig(dir);
 
   const first = grantTranslationEntitlement(config, {
