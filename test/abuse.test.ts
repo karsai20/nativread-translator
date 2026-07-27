@@ -149,6 +149,33 @@ test("probe 2: user B cannot run, read, or peek another user's job by guessing i
   expect(owner.status, "isolation over-rejected: the owner cannot read their own job").toBe(200);
 });
 
+// ── Probe 2b ── §8 isolation, ownerless-job variant. ─────────────────────────
+// A job dir whose manifest is missing or unreadable records NO owner, so it
+// belongs to nobody. Every other job route fails closed on that (`ownsJob`), so
+// /api/translate must too — otherwise any logged-in caller who learns the id can
+// spend AI budget on a stranger's book. A corrupt manifest must fail closed the
+// same way rather than throwing its way to a 500.
+test("probe 2b: nobody can start a translation on an ownerless job dir", async () => {
+  const start = (id: string) =>
+    translatePost(
+      asUser("https://x/api/translate", "user-b", {
+        method: "POST",
+        body: JSON.stringify({ id }),
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+  for (const [id, manifest] of [["job-orphan", null], ["job-corrupt", "{ not json"]] as const) {
+    const dir = join(jobsDir, id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "source.epub"), "epub-bytes");
+    if (manifest) writeFileSync(join(dir, "manifest.json"), manifest);
+
+    const run = await start(id);
+    expect(run.status, `ABUSE ACCEPTED: a stranger started a translation on an ownerless job (${id}, §8 isolation)`).toBe(404);
+  }
+});
+
 // ── Probe 3 ── §8 "replay a purchase txn (dedupe rejects)" (T7). ──────────────
 // A replayed StoreKit transaction id must never mint a second entitlement, and
 // must never be re-bindable to a DIFFERENT user (txn theft). Dedup is keyed on

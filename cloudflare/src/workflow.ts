@@ -18,12 +18,30 @@ type TranslationOutcome =
   | { ok: true; metadata: ContainerResultMetadata; resultKey: string }
   | { ok: false; errorCode: string };
 
+/**
+ * The runner's result header. Its numbers are bound straight into D1 and into
+ * the AI-budget ledger, so the shape is validated here rather than trusted —
+ * a malformed header must fail the job, never write NaN into the ledger.
+ */
 function decodeMetadata(value: string | null): ContainerResultMetadata | null {
   if (!value || value.length > 8_192) return null;
   try {
     const normalized = value.replaceAll("-", "+").replaceAll("_", "/");
     const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-    return JSON.parse(atob(padded)) as ContainerResultMetadata;
+    const decoded = JSON.parse(atob(padded)) as Record<string, unknown>;
+    const finite = (key: string) => Number.isFinite(decoded[key]) && (decoded[key] as number) >= 0;
+    if (
+      !decoded
+      || typeof decoded !== "object"
+      || (decoded.status !== "done" && decoded.status !== "error" && decoded.status !== "cancelled")
+      || !finite("totalChunks")
+      || !finite("translatedChunks")
+      || !finite("costUsd")
+      || (decoded.title !== undefined && typeof decoded.title !== "string")
+    ) {
+      return null;
+    }
+    return decoded as unknown as ContainerResultMetadata;
   } catch {
     return null;
   }

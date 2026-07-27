@@ -175,7 +175,14 @@ function writeManifest(jobDir: string, state: JobState): void {
 }
 export function readManifest(jobDir: string): JobState | undefined {
   const p = manifestPath(jobDir);
-  return existsSync(p) ? (JSON.parse(readFileSync(p, "utf8")) as JobState) : undefined;
+  if (!existsSync(p)) return undefined;
+  try {
+    return JSON.parse(readFileSync(p, "utf8")) as JobState;
+  } catch {
+    // A corrupt manifest records no owner, so every ownership check must fail
+    // closed on it. Throwing here would instead surface as an unhandled 500.
+    return undefined;
+  }
 }
 
 function nowIso(): string {

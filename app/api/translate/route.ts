@@ -2,9 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { hashSource } from "@/lib/core/library";
-import { readManifest } from "@/lib/core/job";
 import { loadConfig } from "@/lib/server/config";
-import { jobDirFor, startJob, isValidJobId } from "@/lib/server/jobs";
+import { getState, jobDirFor, ownsJob, startJob, isValidJobId } from "@/lib/server/jobs";
 import { hasTranslationEntitlement } from "@/lib/server/entitlements";
 import { requestContext } from "@/lib/server/request-context";
 import type { PrecisionMode } from "@/lib/core/quality/route";
@@ -96,8 +95,11 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ error: "Ismeretlen job." }, { status: 404 });
   }
 
-  const manifest = readManifest(jobDir);
-  if (manifest?.userId && manifest.userId !== ctx.userId) {
+  // Own job only, fail-closed like every other job route: a manifest with no
+  // recorded owner belongs to nobody, so it can never be started by anyone.
+  // Unknown and not-owned both 404 so existence never leaks.
+  const manifest = getState(config, id);
+  if (!ownsJob(manifest, ctx.userId)) {
     return Response.json({ error: "Ismeretlen job." }, { status: 404 });
   }
 

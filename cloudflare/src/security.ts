@@ -22,6 +22,7 @@ export function securityHeaders(extra: HeadersInit = {}): Headers {
   headers.set("content-security-policy", "default-src 'none'; frame-ancestors 'none'");
   headers.set("cross-origin-resource-policy", "same-origin");
   headers.set("referrer-policy", "no-referrer");
+  headers.set("strict-transport-security", "max-age=31536000; includeSubDomains; preload");
   headers.set("x-content-type-options", "nosniff");
   headers.set("x-frame-options", "DENY");
   return headers;
@@ -114,12 +115,21 @@ export async function identityFromAppleToken(token: string, env: Env) {
   };
 }
 
-export async function mintSession(userId: string, env: Env): Promise<{ token: string; expiresIn: number }> {
+/**
+ * The configured session secret, or a 503. Callers must go through this before
+ * using SESSION_SECRET for anything — including the auth rate-limit subject,
+ * where an unset secret would otherwise surface as an opaque 500.
+ */
+export function sessionSecret(env: Env): string {
   if (!env.SESSION_SECRET || env.SESSION_SECRET.length < 32) {
     throw new HttpError(503, "A munkamenet-hitelesítés nincs beállítva.");
   }
+  return env.SESSION_SECRET;
+}
+
+export async function mintSession(userId: string, env: Env): Promise<{ token: string; expiresIn: number }> {
   return {
-    token: await createSessionToken(userId, env.SESSION_SECRET),
+    token: await createSessionToken(userId, sessionSecret(env)),
     expiresIn: SESSION_TTL_SECONDS,
   };
 }

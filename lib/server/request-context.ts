@@ -16,7 +16,7 @@ export function bearerToken(req: Request): string | undefined {
 
 type RequestContextConfig = Pick<
   ServerConfig,
-  "mobileSharedSecret" | "appleClientIds" | "googleClientIds" | "sessionSecret"
+  "mobileSharedSecret" | "appleClientIds" | "googleClientIds" | "sessionSecret" | "allowDevAuth"
 >;
 
 /**
@@ -30,7 +30,9 @@ type RequestContextConfig = Pick<
  *   1a trust boundary — once login is configured the header path is gone.
  * - **Dev / LAN mode** (no client id configured): an optional shared secret
  *   plus a trusted `x-nativread-user-id` header. Preserves the homelab and
- *   fake-provider dev flow; never reachable once real login is on.
+ *   fake-provider dev flow; never reachable once real login is on. With no
+ *   shared secret either, this path serves anyone, so a production build
+ *   refuses it unless `ALLOW_DEV_AUTH=1` opts in (`config.allowDevAuth`).
  *
  * `deps.oidcProviders` is injectable so tests supply a local JWKS instead of
  * hitting Apple/Google over the network.
@@ -59,6 +61,11 @@ export async function requestContext(
     if (token !== config.mobileSharedSecret) {
       return Response.json({ error: "Unauthorized." }, { status: 401 });
     }
+  } else if (!config.allowDevAuth) {
+    // No login, no shared secret, and this is a production build: the only
+    // remaining path would trust a client-supplied user id. Refuse rather than
+    // serve every route unauthenticated because an env var was forgotten.
+    return Response.json({ error: "Authentication is not configured." }, { status: 503 });
   }
 
   const raw = req.headers.get("x-nativread-user-id")?.trim() || "local";

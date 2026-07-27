@@ -175,13 +175,23 @@ test("requestContext accepts a NativRead session after the Apple id-token exchan
 });
 
 test("requestContext (dev mode, no login configured) trusts the user-id header", async () => {
-  const res = await requestContext(get({ "x-nativread-user-id": "local-dev" }), {});
+  const res = await requestContext(get({ "x-nativread-user-id": "local-dev" }), {
+    allowDevAuth: true,
+  });
   expect(res).toEqual({ userId: "local-dev" });
 });
 
 test("requestContext (dev mode) defaults to 'local' with no header", async () => {
-  const res = await requestContext(get(), {});
+  const res = await requestContext(get(), { allowDevAuth: true });
   expect(res).toEqual({ userId: "local" });
+});
+
+// The open dev path is opt-in: with no login, no shared secret and dev auth not
+// allowed (a production build without ALLOW_DEV_AUTH=1), every route refuses
+// rather than serving a caller-supplied user id.
+test("requestContext refuses the open dev path when dev auth is not allowed", async () => {
+  const res = await requestContext(get({ "x-nativread-user-id": "anyone" }), {});
+  expect((res as Response).status).toBe(503);
 });
 
 test("requestContext (dev mode) enforces the shared secret when set", async () => {

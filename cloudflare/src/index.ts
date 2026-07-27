@@ -25,6 +25,7 @@ import {
   requireUser,
   safeError,
   securityHeaders,
+  sessionSecret,
   sha256,
   sourceKey,
 } from "./security";
@@ -170,7 +171,7 @@ async function authApple(request: Request, env: Env): Promise<Response> {
   const token = bearerToken(request);
   if (!token) throw new HttpError(401, "Hiányzik az Apple-azonosító.");
   const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
-  const subject = await hmacSubject(env.SESSION_SECRET, `auth:${ip}`);
+  const subject = await hmacSubject(sessionSecret(env), `auth:${ip}`);
   await enforceRateLimit(env.DB, subject, "auth-hour", 20, 60 * 60);
   const identity = await identityFromAppleToken(token, env);
   await ensureAccount(env.DB, identity.userId);

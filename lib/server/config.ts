@@ -36,6 +36,13 @@ export interface ServerConfig {
   maxEpubEntries: number;
   maxEpubUncompressedBytes: number;
   mobileSharedSecret?: string;
+  /**
+   * Whether the unauthenticated dev / LAN path (client-supplied user id header,
+   * no login and no shared secret) may serve requests. Off in production unless
+   * explicitly opted into, so a missing auth config fails closed instead of
+   * quietly opening every route.
+   */
+  allowDevAuth: boolean;
   /** Sign in with Apple client/bundle ids accepted as id-token `aud`. */
   appleClientIds?: string[];
   /** Server credentials used only to revoke Apple authorization on deletion. */
@@ -156,6 +163,7 @@ export function loadConfig(): ServerConfig {
       DEFAULT_EPUB_ARCHIVE_LIMITS.maxUncompressedBytes,
     ),
     mobileSharedSecret: process.env.NATIVREAD_BACKEND_SHARED_SECRET?.trim() || undefined,
+    allowDevAuth: process.env.NODE_ENV !== "production" || process.env.ALLOW_DEV_AUTH === "1",
     appleClientIds,
     appleTeamId: process.env.APPLE_TEAM_ID?.trim() || undefined,
     appleKeyId: process.env.APPLE_KEY_ID?.trim() || undefined,
