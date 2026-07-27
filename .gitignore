@@ -8,8 +8,11 @@ next-env.d.ts
 /library/
 .env
 .env*.local
+cloudflare/.dev.vars
+.wrangler/
 *.log
 .DS_Store
 .claude/
 *.tsbuildinfo
 .gstack/
+.claude/skills/superdesign

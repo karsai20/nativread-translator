@@ -1,0 +1,120 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "nativread-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "minify": true,
+  "vars": {
+    "ENVIRONMENT": "production",
+    "PROVIDER_NAME": "gemini",
+    "PROVIDER_MODEL": "gemini-2.5-flash",
+    "PROVIDER_BASE_URL": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+    "TERMS_VERSION": "2026-07-22",
+    "TERMS_EFFECTIVE_AT": "2026-07-22T00:00:00Z",
+    "TERMS_DOCUMENT_URL": "https://nativread.com/terms/2026-07-22/",
+    "RIGHTS_ATTESTATION_VERSION": "2026-07-22",
+    "AI_CONSENT_VERSION": "2026-07-20-gemini",
+    "AI_PROVIDER_DISCLOSURE": "Google Gemini API",
+    "MAX_EPUB_UPLOAD_BYTES": "33554432",
+    "MAX_EPUB_UNCOMPRESSED_BYTES": "134217728",
+    "MAX_EPUB_ENTRIES": "2000",
+    "MAX_ACTIVE_TRANSLATIONS": "4",
+    "GLOBAL_DAILY_AI_BUDGET_USD": "5",
+    "GLOBAL_MONTHLY_AI_BUDGET_USD": "25",
+    "ARTIFACT_RETENTION_HOURS": "24",
+    "TRANSLATION_CONCURRENCY": "4",
+    "TRANSLATION_REFINE": "1",
+    "TRANSLATION_REFINE_SELECTIVE": "1",
+    "TRANSLATION_REASONER_HARD": "1",
+    "TRANSLATION_PRECISION": "balanced",
+    "COST_CEILING_USD": "3",
+    "REQUIRE_TRANSLATION_ENTITLEMENTS": "1",
+    "ALLOW_DEV_AUTH": "0"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nativread-production",
+      "database_id": "cf59b460-9805-4a2c-86f2-d6685ae59770",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "nativread-artifacts",
+      "jurisdiction": "eu"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "TRANSLATION_QUEUE",
+        "queue": "nativread-translation"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "nativread-translation",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 10,
+        "dead_letter_queue": "nativread-translation-dlq",
+        "max_concurrency": 1
+      }
+    ]
+  },
+  "workflows": [
+    {
+      "name": "nativread-translation",
+      "binding": "TRANSLATION_WORKFLOW",
+      "class_name": "TranslationWorkflow"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TRANSLATOR_CONTAINER",
+        "class_name": "TranslatorContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["TranslatorContainer"]
+    }
+  ],
+  "containers": [
+    {
+      "name": "nativread-translator",
+      "class_name": "TranslatorContainer",
+      "image": "./Dockerfile",
+      "image_build_context": "..",
+      "max_instances": 6,
+      "instance_type": "basic",
+      "scheduling_policy": "regional",
+      "constraints": {
+        "jurisdiction": "eu",
+        "regions": ["EEUR", "WEUR"]
+      }
+    }
+  ],
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
+  "limits": {
+    "cpu_ms": 300000
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    }
+  }
+}
