@@ -161,7 +161,7 @@ export async function POST(req: Request): Promise<Response> {
     words: 0,
     spineItemCount,
     chunks: { total: 0, done: 0 },
-    cost: createCostState(config.costCeilingUsd),
+    cost: createCostState(config.costCeilingUsd, config.model),
     createdAt: new Date().toISOString(),
   };
   writeFileSync(join(jobDir, "manifest.json"), JSON.stringify(state, null, 2));

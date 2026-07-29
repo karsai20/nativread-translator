@@ -103,6 +103,7 @@ export function startJob(
     reasonerForHard: config.reasonerForHard,
     precision,
     concurrency: config.concurrency,
+    ...(config.model ? { model: config.model } : {}),
     libraryDir: config.libraryDir,
     ...(sample ? { sample: true } : {}),
     onProgress: cacheState,
