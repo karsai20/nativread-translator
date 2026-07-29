@@ -44,3 +44,56 @@ test("OpenAI-compatible adapter uses the configured model and response_format", 
     response_format: { type: "json_object" },
   });
 });
+
+test("reasoning_effort is sent on normal calls but never on the reasoner model", async () => {
+  const bodies: unknown[] = [];
+  const fake = fetchReturning([{ choices: [{ message: { content: "kész" } }] }], bodies);
+  const t = new OpenAICompatibleTranslator({
+    apiKey: "k",
+    model: "flash",
+    reasonerModel: "thinky",
+    reasoningEffort: "none",
+    fetchImpl: fake,
+  });
+
+  await t.translateChunk({ text: "x", sourceLang: "English", targetLang: "Hungarian", glossary: {} });
+  await t.refineChunk({ source: "x", draft: "y", targetLang: "Hungarian", glossary: {}, deep: true });
+
+  expect(bodies[0]).toMatchObject({ model: "flash", reasoning_effort: "none" });
+  expect(bodies[1]).toMatchObject({ model: "thinky" });
+  expect(bodies[1]).not.toHaveProperty("reasoning_effort");
+});
+
+test("thinking config is sent on normal calls but never on the reasoner model", async () => {
+  const bodies: unknown[] = [];
+  const fake = fetchReturning([{ choices: [{ message: { content: "kész" } }] }], bodies);
+  const thinkingBody = { extra_body: { google: { thinking_config: { thinking_level: "minimal" } } } };
+  const t = new OpenAICompatibleTranslator({
+    apiKey: "k",
+    model: "flash",
+    reasonerModel: "thinky",
+    thinkingBody,
+    fetchImpl: fake,
+  });
+
+  await t.translateChunk({ text: "x", sourceLang: "English", targetLang: "Hungarian", glossary: {} });
+  await t.refineChunk({ source: "x", draft: "y", targetLang: "Hungarian", glossary: {}, deep: true });
+
+  expect(bodies[0]).toMatchObject(thinkingBody);
+  // The escalation model is chosen for its reasoning — suppressing it there is self-defeating.
+  expect(bodies[1]).not.toHaveProperty("extra_body");
+});
+
+test("reports provider-cached input tokens so cost is not overstated", async () => {
+  const fake = fetchReturning([
+    {
+      choices: [{ message: { content: "kész" } }],
+      usage: { prompt_tokens: 1000, completion_tokens: 10, prompt_tokens_details: { cached_tokens: 700 } },
+    },
+  ]);
+  const t = new OpenAICompatibleTranslator({ apiKey: "k", model: "flash", fetchImpl: fake });
+
+  const out = await t.translateChunk({ text: "x", sourceLang: "English", targetLang: "Hungarian", glossary: {} });
+
+  expect(out.usage?.cachedInputTokens).toBe(700);
+});

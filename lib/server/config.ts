@@ -27,6 +27,9 @@ export interface ServerConfig {
   model?: string;
   baseUrl?: string;
   reasonerModel?: string;
+  /** Thinking configuration for the draft/refine/judge calls; see thinkingFor(). */
+  reasoningEffort?: string;
+  thinkingBody?: Record<string, unknown>;
   refine: boolean;
   refineSelective: boolean;
   reasonerForHard: boolean;
@@ -105,6 +108,35 @@ function providerBaseUrl(provider: ProviderName): string | undefined {
   return undefined;
 }
 
+/** Lowest thinking setting available across the Gemini families. */
+const DEFAULT_THINKING = "minimal";
+
+/**
+ * Gemini models think by default and bill thought tokens at the OUTPUT rate, which
+ * silently inflates every draft, refine and judge call — measured on gemini-3.6-flash,
+ * translating one sentence spent 731 thinking tokens against 16 tokens of answer.
+ * Translation is not a reasoning task; the pipeline escalates genuinely hard chunks to
+ * PROVIDER_REASONER_MODEL instead, and that call keeps its thinking.
+ *
+ * The two families take different parameters (verified with `bun run eval:probe`):
+ * 2.5 accepts OpenAI's `reasoning_effort` and rejects Gemini's thinking_config, while 3.x
+ * rejects `reasoning_effort: none` outright and wants thinking_level nested under a
+ * top-level `extra_body` key. Set PROVIDER_THINKING=default to send neither.
+ */
+function thinkingFor(
+  provider: ProviderName,
+  model: string | undefined,
+): { reasoningEffort?: string; thinkingBody?: Record<string, unknown> } {
+  if (provider !== "gemini") return {};
+  const level = (process.env.PROVIDER_THINKING ?? DEFAULT_THINKING).trim();
+  if (!level || level === "default") return {};
+
+  if (/^gemini-3/.test(model ?? "")) {
+    return { thinkingBody: { extra_body: { google: { thinking_config: { thinking_level: level } } } } };
+  }
+  return { reasoningEffort: level === DEFAULT_THINKING ? "none" : level };
+}
+
 function positiveIntegerEnv(name: string, fallback: number): number {
   const value = Number(process.env[name]);
   return Number.isSafeInteger(value) && value > 0 ? value : fallback;
@@ -140,6 +172,7 @@ export function loadConfig(): ServerConfig {
     model: providerModel(providerName),
     baseUrl: providerBaseUrl(providerName),
     reasonerModel: process.env.PROVIDER_REASONER_MODEL?.trim() || undefined,
+    ...thinkingFor(providerName, providerModel(providerName)),
     // Second polish pass is on by default (quality is the priority).
     refine: (process.env.TRANSLATION_REFINE ?? "1") !== "0",
     // Gate that polish on a cheap quality estimate by default: only weak drafts pay for
@@ -197,5 +230,7 @@ export function createProvider(config: ServerConfig): Translator {
     model: config.model,
     ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
     ...(config.reasonerModel ? { reasonerModel: config.reasonerModel } : {}),
+    ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+    ...(config.thinkingBody ? { thinkingBody: config.thinkingBody } : {}),
   });
 }
