@@ -16,7 +16,7 @@ import { parseEpub, writeEpub, type Epub } from "./epub";
 import { injectAiMarker } from "./ai-marker";
 import { chunkSpineItem, type Chunk } from "./chunker";
 import { translateBlocks, TranslationGuardError, type Translator } from "./translator";
-import { seedFromText, type GlossaryMap } from "./glossary";
+import { merge as mergeGlossary, seedFromTexts, type GlossaryMap } from "./glossary";
 import { stripInlineTags } from "./markup";
 import {
   createCostState,
@@ -69,6 +69,11 @@ export interface JobState {
   sample?: boolean;
   /** Quality mode used for this job. */
   precision?: PrecisionMode;
+  /**
+   * Book-wide name/term renderings, decided once before translation starts. Persisted so
+   * a resumed job keeps the same renderings (and does not pay for the pass twice).
+   */
+  glossary?: GlossaryMap;
 }
 
 interface ChunkResult {
@@ -153,6 +158,8 @@ export interface RunJobOptions {
   sample?: boolean;
   /** Chapters translated in parallel. Defaults to DEFAULT_CONCURRENCY. */
   concurrency?: number;
+  /** Model id, used only to price this job's tokens (see priceProfileFor). */
+  model?: string;
   /** If set, the finished book is saved into this household library dir. */
   libraryDir?: string;
   onProgress?: (state: JobState) => void;
@@ -249,8 +256,8 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
 
   const epub = parseEpub(epubBytes);
 
-  let glossary: GlossaryMap = {};
-  for (const item of epub.spine) glossary = seedFromText(item.content, glossary);
+  let glossary: GlossaryMap = seedFromTexts(epub.spine.map((item) => item.content));
+  const seededTerms = Object.keys(glossary).length;
 
   const parsedByHref = new Map<
     string,
@@ -292,7 +299,9 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     spineItemCount: epub.spine.length,
     chunks: { total: allChunks.length, done: doneAtStart },
     // Default cachedInputTokens for manifests written before cache-aware pricing existed.
-    cost: prior?.cost ? { ...createCostState(ceilingUsd), ...prior.cost, ceilingUsd } : createCostState(ceilingUsd),
+    cost: prior?.cost
+      ? { ...createCostState(ceilingUsd, opts.model), ...prior.cost, ceilingUsd }
+      : createCostState(ceilingUsd, opts.model),
     createdAt: prior?.createdAt ?? nowIso(),
     startedAt: prior?.startedAt ?? nowIso(),
     chunkDurationsMs: prior?.chunkDurationsMs ?? [],
@@ -300,6 +309,34 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     ...(isSample ? { sample: true } : {}),
   };
   state = persist(jobDir, state, onProgress);
+
+  // Decide every recurring name's Hungarian rendering ONCE, before the chunks fan out.
+  // Hundreds of parallel chunks cannot agree on "Holloway úr" by themselves.
+  if (prior?.glossary) {
+    glossary = mergeGlossary(glossary, prior.glossary);
+  } else if (provider.fillGlossary && seededTerms > 0) {
+    try {
+      const filled = await provider.fillGlossary({
+        terms: Object.keys(glossary),
+        targetLang: "Hungarian",
+      });
+      // The pass owns the final list: a term it leaves out is one it judged not to be a
+      // name, and pinning those to a fixed rendering does more harm than leaving them free.
+      if (Object.keys(filled.glossary).length > 0) glossary = filled.glossary;
+      state = persist(
+        jobDir,
+        { ...state, glossary, ...(filled.usage ? { cost: addUsage(state.cost, filled.usage) } : {}) },
+        onProgress,
+      );
+    } catch (err) {
+      // Falling back to the seeded glossary only costs consistency, never the book.
+      console.error(JSON.stringify({
+        event: "glossary-fill-failed",
+        jobId: id,
+        error: err instanceof Error ? `${err.name}: ${err.message}`.slice(0, 200) : "unknown",
+      }));
+    }
+  }
 
   const results = new Map<string, ChunkResult>();
 
@@ -320,7 +357,23 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
   let failedChunks = 0;
   let refusedChunks = 0;
 
-  const processChunk = async (chunk: Chunk, anchor: string): Promise<ChunkResult | undefined> => {
+  /**
+   * Plain-text tail of the chunk before this one. The style anchor keeps the voice
+   * consistent, but only this tells chunk N who "he" was at the end of chunk N-1 — and
+   * unlike a translated tail it is known up front, so it costs the worker pool nothing.
+   */
+  const sourceContextFor = (i: number): string | undefined => {
+    const previous = allChunks[i - 1];
+    if (!previous) return undefined;
+    const text = previous.blocks
+      .map((b) => stripInlineTags(b.innerHtml).replace(/<[^>]+>/g, " "))
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return text ? tail(text) : undefined;
+  };
+
+  const processChunk = async (chunk: Chunk, anchor: string, index: number): Promise<ChunkResult | undefined> => {
     const cached = loadChunkResult(jobDir, chunk.key);
     if (cached) {
       results.set(chunk.key, cached);
@@ -336,9 +389,11 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     const startedMs = Date.now();
     let blocks, usage, plainText;
     try {
+      const sourceContext = sourceContextFor(index);
       const out = await translateBlocks(provider, chunk.blocks, {
         glossary,
         previousContext: anchor || undefined,
+        ...(sourceContext ? { sourceContext } : {}),
         refine: opts.refine,
         selectiveRefine: opts.selectiveRefine,
         reasonerForHard: opts.reasonerForHard,
@@ -407,7 +462,7 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
       }
       const i = nextChunk++;
       if (i >= allChunks.length) return;
-      await processChunk(allChunks[i]!, anchor);
+      await processChunk(allChunks[i]!, anchor, i);
     }
   };
 
@@ -418,7 +473,7 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
       const signal = opts.shouldStop?.();
       if (signal) stopSignal = signal;
       else {
-        const firstResult = await processChunk(allChunks[0]!, "");
+        const firstResult = await processChunk(allChunks[0]!, "", 0);
         if (firstResult) anchor = tail(firstResult.plainText);
       }
     }
