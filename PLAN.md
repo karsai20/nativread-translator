@@ -118,6 +118,36 @@ job: re-stitch translated XHTML ─► translated EPUB ─► reader (bilingual 
 - [ ] Persistent household library works: a translated book stays available so it is
       not re-translated; reachable from another household device on the LAN.
 
+## Model and pipeline decisions (measured 2026-07-28, `bun run eval`)
+
+Measured on *Lord of Mysteries Vol. 1* (421k words, 433 chunks), 12 sampled chunks per
+config, plus Wilde's *Dorian Gray* chapter 1 read against Kosztolányi's translation.
+
+| model | $/book | s/chunk | guard failures |
+|---|---|---|---|
+| **gemini-3.1-flash-lite** (chosen) | **$2.18** | **6.7** | 0/12 |
+| gemini-2.5-flash (previous default) | $7.67 | 22.1 | 0/12 |
+| gemini-3.5-flash-lite | $3.15 | 27.8 | 6/12 |
+| gemini-3.6-flash | $15.73 | 12.6 | 0/12 |
+
+- **Draft/refine model: `gemini-3.1-flash-lite`.** Not merely the cheapest: the only one of
+  the three finalists whose output was complete and typographically consistent. 3.6-flash
+  dropped an entire paragraph of dialogue and produced a bare article error ("a orgona") at
+  7x the price; 2.5-flash mixed dash and quote dialogue punctuation inside one passage.
+- **Escalation model: `gemini-3.6-flash`.** Its capability is worth paying for on the few
+  chunks the validators flag, where its sloppiness is re-checked by the length band.
+- **Thinking: `minimal`.** Gemini bills thought tokens at the output rate; measured on
+  3.6-flash, one sentence spent 731 thinking tokens against 16 tokens of answer. The wire
+  shape differs per model family — `bun run eval:probe` re-derives it.
+- **Batch API: rejected.** It halves price and changes nothing about quality. At $2.18 and
+  ~12 minutes per book it would save ~$1.09 in exchange for hours of latency, a second
+  permanent code path, and the loss of per-chunk resume, ETA and pause. Revisit if the
+  model tier moves up (3.6-flash batch would save $7.86/book) or volume passes ~50
+  books/month.
+- **Known residual:** roughly 5% of generations pick a wrong-but-plausible word ("lilac" →
+  "hársfák" instead of "orgona"). It is not temperature and not the refine pass — both were
+  measured. No local validator can catch this class; only a judge or a reader can.
+
 ## How an agent should execute this (subagent lanes)
 
 Block-by-block, each block green-tested before the next.
