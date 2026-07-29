@@ -9,6 +9,8 @@
     "start": "next start",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
+    "eval": "bun run eval/run.ts",
+    "eval:probe": "bun run eval/probe-thinking.ts",
     "cf:typecheck": "tsc --noEmit -p cloudflare/tsconfig.json",
     "cf:dev": "wrangler dev --config cloudflare/wrangler.jsonc",
     "cf:migrate:local": "wrangler d1 migrations apply nativread-production --local --config cloudflare/wrangler.jsonc",
