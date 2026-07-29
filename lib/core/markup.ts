@@ -92,6 +92,14 @@ export function splitBlockSegments(text: string): BlockSegment[] {
   });
 }
 
+/**
+ * Inverse of splitBlockSegments: rebuild a multi-block payload from segments. Used to
+ * send only a subset of blocks for a second pass and to splice the result back in.
+ */
+export function joinBlockSegments(segments: BlockSegment[]): string {
+  return segments.map((s) => `${blockMarker(s.index)}\n${s.body.trim()}`).join("\n\n");
+}
+
 /** True if any inline token or block marker sentinel survived into final output (= corruption). */
 export function hasResidualSentinel(s: string): boolean {
   return s.includes(TOKEN_OPEN) || s.includes(TOKEN_CLOSE) || s.includes(BLOCK_OPEN) || s.includes(BLOCK_CLOSE);

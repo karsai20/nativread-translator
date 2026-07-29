@@ -23,12 +23,13 @@ import type { GlossaryMap } from "./glossary";
 import {
   stripInlineTags,
   blockMarker,
+  joinBlockSegments,
   splitBlockSegments,
   BLOCK_MARKER_OPEN,
   BLOCK_MARKER_CLOSE,
 } from "./markup";
 import { protectHtmlTextNodes, type ProtectedHtmlText } from "./html-segments";
-import { validateChunk, type ValidateOptions } from "./quality/validators";
+import { validateChunk, type QualityFlag, type ValidateOptions } from "./quality/validators";
 import { routeDraft, MAX_QUALITY_ITERATIONS, type PrecisionMode } from "./quality/route";
 import { guardChunk, type GuardReason } from "./quality/guard";
 
@@ -55,10 +56,30 @@ export interface TranslateChunkInput {
   /** Tail of the previously translated text, for seamless continuity. */
   previousContext?: string;
   /**
+   * Tail of the SOURCE text immediately preceding this chunk. Unlike previousContext it
+   * needs no translated predecessor, so it survives full chunk-level parallelism — it is
+   * what tells the model who "he" refers to across a chunk seam.
+   */
+  sourceContext?: string;
+  /**
    * Force deterministic decoding (temperature 0). Used by the guard's retry: when a draft
    * was rejected, a temp-0 re-translation is far less likely to repeat a degenerate result.
    */
   deterministic?: boolean;
+}
+
+/**
+ * What is actually wrong with the draft, as far as the validators and the judge can tell.
+ * The pipeline computes this to DECIDE on a refine; passing it along makes the second pass
+ * targeted ("these names are missing") instead of a blind re-polish.
+ */
+export interface RefineDiagnosis {
+  flags: QualityFlag[];
+  /** Glossary terms present in the source whose agreed rendering is absent from the draft. */
+  missingGlossary: string[];
+  omission?: boolean;
+  accuracy?: boolean;
+  fluency?: boolean;
 }
 
 export interface RefineChunkInput {
@@ -71,6 +92,8 @@ export interface RefineChunkInput {
   previousContext?: string;
   /** Escalate this refine to a slower reasoning model (for the hardest passages). */
   deep?: boolean;
+  /** Known defects, so the editor pass knows what to look for. */
+  diagnosis?: RefineDiagnosis;
 }
 
 export interface TranslateChunkOutput {
@@ -100,12 +123,37 @@ export interface EstimateChunkOutput {
   accuracy?: boolean;
   /** Judge flag: reads awkward/unnatural in the target language. */
   fluency?: boolean;
+  /**
+   * Block indices the judge considers weak. Lets the refine pass regenerate only those
+   * blocks — output tokens are ~85% of a chunk's cost, so re-emitting clean paragraphs
+   * is the single most wasteful thing the pipeline can do.
+   */
+  weakBlocks?: number[];
+  usage?: TokenUsage;
+}
+
+export interface FillGlossaryInput {
+  /** Source terms whose target-language rendering is not decided yet. */
+  terms: string[];
+  targetLang: string;
+}
+
+export interface FillGlossaryOutput {
+  /** Source term -> the rendering to use for the whole book. */
+  glossary: GlossaryMap;
   usage?: TokenUsage;
 }
 
 export interface Translator {
   readonly name: string;
   translateChunk(input: TranslateChunkInput): Promise<TranslateChunkOutput>;
+  /**
+   * Optional one-shot pass that decides each seeded name's rendering BEFORE the book is
+   * translated. Without it every chunk decides independently — with hundreds of chunks
+   * running in parallel, "Mr. Holloway" becomes "Holloway úr" in one chapter and stays
+   * "Mr. Holloway" in the next.
+   */
+  fillGlossary?(input: FillGlossaryInput): Promise<FillGlossaryOutput>;
   /** Optional second-pass polish. If absent, refinement is skipped. */
   refineChunk?(input: RefineChunkInput): Promise<TranslateChunkOutput>;
   /**
@@ -129,6 +177,8 @@ export interface BlockResult {
 export interface TranslateBlocksOptions {
   glossary: GlossaryMap;
   previousContext?: string;
+  /** Source text immediately before this chunk; resolves references across seams. */
+  sourceContext?: string;
   /** Run the second polish pass when the provider supports it. */
   refine?: boolean;
   /**
@@ -156,10 +206,20 @@ export class TranslationGuardError extends Error {
   }
 }
 
-/** Mode-dependent length-ratio band for the omission check (HU renders near EN length). */
+/**
+ * Mode-dependent length-ratio band for the omission check.
+ *
+ * Calibrated against a measured run (`bun run eval`, 12 chunks x 3 models on a real
+ * novel): healthy EN->HU chunks land between 0.91 and 1.04, median 1.00. A chunk that had
+ * silently dropped a whole paragraph of dialogue measured 0.85 — and sailed through the
+ * old 0.55 floor, which would let a chunk lose 45% of the book and still pass.
+ *
+ * The floor is the side that matters: a missing paragraph is invisible to the reader who
+ * has no source, while over-length only ever costs a wasted refine pass.
+ */
 function lengthBand(mode: PrecisionMode | undefined): ValidateOptions {
-  if (mode === "fidelity") return { minLengthRatio: 0.7, maxLengthRatio: 2.0 };
-  return { minLengthRatio: 0.55, maxLengthRatio: 2.4 };
+  if (mode === "fidelity") return { minLengthRatio: 0.92, maxLengthRatio: 1.25 };
+  return { minLengthRatio: 0.88, maxLengthRatio: 1.45 };
 }
 
 export interface TranslateBlocksResult {
@@ -180,7 +240,8 @@ function addUsage(a: TokenUsage, b?: TokenUsage): TokenUsage {
   };
 }
 
-function toPlainText(html: string): string {
+/** Inner HTML -> readable text: drops markup tokens and tags, collapses whitespace. */
+export function toPlainText(html: string): string {
   const withoutMarkup = stripInlineTags(html).replace(/<[^>]+>/g, " ");
   return parse(withoutMarkup).text
     .replace(/\s+/g, " ")
@@ -253,6 +314,47 @@ interface ProduceControl {
   refine?: boolean;
 }
 
+/**
+ * Narrow a refine pass to the blocks the judge flagged. Returns undefined — meaning
+ * "refine the whole chunk" — whenever scoping would be unsafe: no flagged blocks, a
+ * draft that no longer splits into the expected blocks, or a flag set that covers
+ * everything anyway.
+ */
+function scopeToWeakBlocks(
+  sourcePayload: string,
+  draft: string,
+  weakBlocks: number[] | undefined,
+): { source: string; draft: string } | undefined {
+  if (!weakBlocks || weakBlocks.length === 0) return undefined;
+
+  const sourceSegments = splitBlockSegments(sourcePayload);
+  const draftSegments = splitBlockSegments(draft);
+  if (sourceSegments.length === 0 || draftSegments.length !== sourceSegments.length) return undefined;
+
+  const wanted = new Set(weakBlocks);
+  const source = sourceSegments.filter((s) => wanted.has(s.index));
+  const scopedDraft = draftSegments.filter((s) => wanted.has(s.index));
+  if (source.length === 0 || source.length !== scopedDraft.length) return undefined;
+  if (source.length === sourceSegments.length) return undefined; // everything is weak
+
+  return { source: joinBlockSegments(source), draft: joinBlockSegments(scopedDraft) };
+}
+
+/**
+ * Replace the refined blocks inside the full draft, keeping every block the refine pass
+ * did not return. A refine that mangled its markers therefore costs us nothing but the
+ * tokens — the original blocks stay.
+ */
+function spliceBlocks(fullDraft: string, refinedSubset: string): string {
+  const refined = new Map(splitBlockSegments(refinedSubset).map((s) => [s.index, s.body.trim()]));
+  if (refined.size === 0) return fullDraft;
+  const merged = splitBlockSegments(fullDraft).map((s) => {
+    const replacement = refined.get(s.index);
+    return replacement ? { index: s.index, body: replacement } : s;
+  });
+  return joinBlockSegments(merged);
+}
+
 /** One full attempt at a chunk: draft, optional refine, split, restore (with marker fallback). */
 async function produceBlocks(
   provider: Translator,
@@ -271,6 +373,7 @@ async function produceBlocks(
     targetLang: TARGET_LANG,
     glossary: opts.glossary,
     previousContext: opts.previousContext,
+    sourceContext: opts.sourceContext,
     deterministic: ctl.deterministic,
   });
   usage = addUsage(usage, draft.usage);
@@ -306,8 +409,12 @@ async function produceBlocks(
           band,
         );
 
+        // The judge is a paid call that only feeds routeDraft. A local omission flag
+        // already routes to the maximum action (deep refine), which no verdict can
+        // escalate further — so buying a verdict there changes nothing. Minor flags
+        // still ask the judge, since it can upgrade them to a deep refine.
         let verdict;
-        if (provider.estimateChunk) {
+        if (provider.estimateChunk && !local.flags.includes("omission")) {
           try {
             verdict = await provider.estimateChunk({
               source: payload,
@@ -324,16 +431,28 @@ async function produceBlocks(
         const decision = routeDraft({ local, verdict, mode, iteration });
         if (decision.action === "accept") break;
 
+        const diagnosis: RefineDiagnosis = {
+          flags: local.flags,
+          missingGlossary: local.missingGlossary,
+          ...(verdict?.omission ? { omission: true } : {}),
+          ...(verdict?.accuracy ? { accuracy: true } : {}),
+          ...(verdict?.fluency ? { fluency: true } : {}),
+        };
+        // Regenerate only the blocks the judge called out, when it named any and the
+        // draft still splits cleanly; otherwise polish the whole chunk as before.
+        const scope = scopeToWeakBlocks(payload, finalText, verdict?.weakBlocks);
+
         const refined = await provider.refineChunk({
-          source: payload,
-          draft: finalText,
+          source: scope?.source ?? payload,
+          draft: scope?.draft ?? finalText,
           targetLang: TARGET_LANG,
           glossary: opts.glossary,
           previousContext: opts.previousContext,
           deep: decision.deep && Boolean(opts.reasonerForHard),
+          diagnosis,
         });
         usage = addUsage(usage, refined.usage);
-        finalText = refined.text;
+        finalText = scope ? spliceBlocks(finalText, refined.text) : refined.text;
       }
     }
   }
@@ -385,6 +504,7 @@ async function translateBlocksIndividually(
       targetLang: TARGET_LANG,
       glossary: opts.glossary,
       previousContext: opts.previousContext,
+      sourceContext: opts.sourceContext,
       deterministic,
     });
     usage = addUsage(usage, res.usage);
@@ -420,6 +540,7 @@ async function translateTextSegmentsIndividually(
       targetLang: TARGET_LANG,
       glossary: opts.glossary,
       previousContext: opts.previousContext,
+      sourceContext: opts.sourceContext,
       deterministic,
     });
     usage = addUsage(usage, res.usage);
