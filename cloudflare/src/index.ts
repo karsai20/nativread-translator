@@ -1,16 +1,17 @@
 import { revokeAppleAuthorizationCode } from "../../lib/server/apple-oauth";
 
-import { TranslatorContainer } from "./container";
+import { TranslatorContainer, translatorContainer } from "./container";
+import type { BookPurchaseInput } from "./database";
 import {
-  CREDIT_PRODUCTS,
   UserDataRepository,
+  bookTierFor,
   internalJobById,
-  internalRefundReservation,
   internalReleaseAIBudget,
 } from "./database";
 import { validateTermsAcceptance } from "./legal";
 import {
   HttpError,
+  appAccountTokenFor,
   bearerToken,
   enforceRateLimit,
   ensureAccount,
@@ -21,6 +22,7 @@ import {
   mintSession,
   objectPrefix,
   parseSmallJson,
+  recordSecurityEvent,
   requestId,
   requireUser,
   safeError,
@@ -29,12 +31,20 @@ import {
   sha256,
   sourceKey,
 } from "./security";
+import { appStoreTransaction, transactionRejection } from "./storekit";
 import type { Env, JobRow, TranslationMessage } from "./types";
 import { TranslationWorkflow } from "./workflow";
 
 export { TranslationWorkflow, TranslatorContainer };
+// Required by the containers runtime whenever a container intercepts outbound
+// traffic — and TranslatorContainer does, via `interceptHttps`/`allowedHosts`.
+// Without this export every container start fails with
+// "ctx.exports.ContainerProxy is undefined".
+export { ContainerProxy } from "@cloudflare/containers";
 
 const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
+/** Shared container for upload inspection, so parsing never competes with translations. */
+const INSPECT_CONTAINER = "inspect";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 function integerEnv(value: string, fallback: number, min: number, max: number): number {
@@ -111,6 +121,13 @@ async function readBoundedFormData(request: Request, maximumFileBytes: number): 
   }
 }
 
+/** The container names the exact reason a book was rejected; surface it to the reader. */
+async function rejectionReason(response: Response): Promise<string> {
+  const body = await response.json().catch(() => null) as { error?: unknown } | null;
+  const reason = typeof body?.error === "string" ? body.error.trim().slice(0, 160) : "";
+  return reason ? ` (${reason})` : "";
+}
+
 async function inspectUpload(
   env: Env,
   jobId: string,
@@ -121,20 +138,44 @@ async function inspectUpload(
   spineItemCount: number;
   quote: { version: string; sourceCharacters: number; requiredCredits: number; charactersPerCredit: number };
 }> {
-  const container = env.TRANSLATOR_CONTAINER.jurisdiction("eu").getByName(jobId);
-  const response = await container.fetch("http://container/inspect", {
-    method: "POST",
-    headers: {
-      "content-type": "application/epub+zip",
-      "content-length": String(bytes.byteLength),
-      "x-nativread-internal-token": env.CONTAINER_INTERNAL_TOKEN,
-      "x-nativread-job-id": jobId,
-    },
-    body: exactArrayBuffer(bytes),
-  });
+  // Inspection is a sub-second stateless parse. Naming the container after the
+  // job gave every upload its own instance, which then idled until `sleepAfter`
+  // and ate the whole `max_instances` budget — the next upload got no container
+  // at all. One shared instance serves every inspection.
+  // ponytail: single instance; shard to `inspect-<n>` if parse throughput bites.
+  const container = translatorContainer(env, INSPECT_CONTAINER);
+  let response: Response;
+  try {
+    response = await container.fetch("http://container/inspect", {
+      method: "POST",
+      headers: {
+        "content-type": "application/epub+zip",
+        "content-length": String(bytes.byteLength),
+        "x-nativread-internal-token": env.CONTAINER_INTERNAL_TOKEN,
+        "x-nativread-job-id": jobId,
+      },
+      body: exactArrayBuffer(bytes),
+    });
+  } catch {
+    // No container to run the check in. That is our capacity, not a bad book.
+    throw new HttpError(503, "A szolgáltatás pillanatnyilag túlterhelt. Próbáld újra egy perc múlva.");
+  }
   if (!response.ok) {
-    const status = response.status === 413 ? 413 : 400;
-    throw new HttpError(status, status === 413 ? "Az EPUB fájl túl nagy." : "Érvénytelen EPUB fájl.");
+    if (response.status === 413) throw new HttpError(413, "Az EPUB fájl túl nagy.");
+    // Allowlist, not denylist: only 400 and 413 are verdicts on the book. Any
+    // other status (auth, boot, crash) is our side and must not read as
+    // "your file is broken" — that is what hid this outage for a whole morning.
+    if (response.status !== 400) {
+      // The reader gets a generic message, so the status has to reach the log
+      // or the outage is invisible from the outside.
+      console.error(JSON.stringify({
+        event: "inspect-unavailable",
+        status: response.status,
+        detail: (await response.text().catch(() => "")).slice(0, 200),
+      }));
+      throw new HttpError(502, "A könyv ellenőrzése nem sikerült.");
+    }
+    throw new HttpError(400, `Érvénytelen EPUB fájl.${await rejectionReason(response)}`);
   }
   const body = await response.json() as {
     sourceHash?: unknown;
@@ -175,7 +216,12 @@ async function authApple(request: Request, env: Env): Promise<Response> {
   await enforceRateLimit(env.DB, subject, "auth-hour", 20, 60 * 60);
   const identity = await identityFromAppleToken(token, env);
   await ensureAccount(env.DB, identity.userId);
-  return json(await mintSession(identity.userId, env));
+  return json({
+    ...await mintSession(identity.userId, env),
+    // The app must attach this to every StoreKit purchase, so the receipt Apple
+    // signs already names the account it belongs to.
+    appAccountToken: appAccountTokenFor(identity.userId),
+  });
 }
 
 async function upload(request: Request, env: Env): Promise<Response> {
@@ -207,6 +253,19 @@ async function upload(request: Request, env: Env): Promise<Response> {
     if (inspected.sourceHash !== await sha256(bytes)) {
       throw new HttpError(409, "A feltöltött fájl ellenőrzése nem egyezett.");
     }
+    const tier = bookTierFor(inspected.quote.sourceCharacters);
+    if (!tier) {
+      throw new HttpError(
+        413,
+        "Ez a könyv hosszabb annál, mint amit egy fordításban vállalunk.",
+        "book_too_long",
+      );
+    }
+    const price = {
+      productId: tier.productId,
+      tier: tier.tier,
+      sourceCharacters: inspected.quote.sourceCharacters,
+    };
     const entitledLanguages = await userData.entitled(inspected.sourceHash, "hu")
       ? ["hu"]
       : [];
@@ -222,6 +281,7 @@ async function upload(request: Request, env: Env): Promise<Response> {
         entitledLanguages,
         sourceHash: inspected.sourceHash,
         quote: inspected.quote,
+        price,
       });
     }
 
@@ -247,6 +307,7 @@ async function upload(request: Request, env: Env): Promise<Response> {
       entitledLanguages,
       sourceHash: inspected.sourceHash,
       quote: inspected.quote,
+      price,
     });
   } catch (error) {
     await env.ARTIFACTS.delete(key).catch(() => undefined);
@@ -254,18 +315,78 @@ async function upload(request: Request, env: Env): Promise<Response> {
   }
 }
 
-async function credits(request: Request, env: Env): Promise<Response> {
+/**
+ * Turns a StoreKit transaction into the entitlement for one book.
+ *
+ * Nothing the device sends is trusted: the transaction id is looked up at Apple,
+ * and the receipt has to name this bundle, this account (appAccountToken) and the
+ * exact tier the uploaded book falls into. The device only tells us which job it
+ * is paying for.
+ */
+async function purchase(request: Request, env: Env): Promise<Response> {
   const userId = await requireUser(request, env);
   const userData = new UserDataRepository(env.DB, userId);
-  return json({ account: await userData.getCreditAccount(), products: CREDIT_PRODUCTS });
+  await enforceRateLimit(env.DB, userId, "purchase-hour", 20, 60 * 60);
+
+  const body = await parseSmallJson<{ id?: unknown; transactionId?: unknown }>(request);
+  if (typeof body.id !== "string" || !UUID_PATTERN.test(body.id)) {
+    throw new HttpError(400, "Érvénytelen fordításazonosító.");
+  }
+  if (typeof body.transactionId !== "string" || !/^[A-Za-z0-9._-]{1,64}$/u.test(body.transactionId)) {
+    throw new HttpError(400, "Érvénytelen tranzakcióazonosító.");
+  }
+
+  const job = await userData.job(body.id);
+  if (!job) throw new HttpError(404, "Ismeretlen fordítás.");
+  const tier = bookTierFor(job.source_characters);
+  if (!tier) throw new HttpError(409, "Ez a könyv hosszabb annál, mint amit lefordítunk.");
+
+  const purchased = await verifiedPurchase(body.transactionId, env, userId, tier.productId);
+  if (typeof purchased === "string") {
+    await recordSecurityEvent(env.DB, userId, "storekit-rejected", `${purchased}:${body.transactionId}`);
+    throw new HttpError(409, "Ez a vásárlás nem érvényes ehhez a könyvhöz.");
+  }
+
+  const recorded = await userData.recordBookPurchase(job, purchased);
+  if (recorded.conflict) {
+    await recordSecurityEvent(env.DB, userId, "storekit-replay", `foreign:${body.transactionId}`);
+    throw new HttpError(409, "Ez a tranzakció már egy másik vásárláshoz tartozik.");
+  }
+  return json({ ok: true, applied: recorded.applied, entitledLanguages: ["hu"] });
 }
 
-async function purchase(request: Request, env: Env): Promise<Response> {
-  await requireUser(request, env);
-  await parseSmallJson(request);
-  // Never trust transaction IDs sent by the device. Add App Store Server API
-  // verification before enabling this endpoint.
-  throw new HttpError(501, "A StoreKit szerveroldali ellenőrzése még nincs beállítva.");
+/**
+ * Verifies a transaction with Apple, or names the reason it may not be spent.
+ *
+ * Xcode's local StoreKit test transactions do not exist at Apple, so the purchase
+ * UI could not be exercised at all without the bypass below. It is bound to the
+ * same dev switch as the dev auth bypass, which production sets to 0.
+ */
+async function verifiedPurchase(
+  transactionId: string,
+  env: Env,
+  userId: string,
+  expectedProductId: string,
+): Promise<BookPurchaseInput | string> {
+  const isDevBypass = env.ENVIRONMENT !== "production"
+    && env.ALLOW_DEV_AUTH === "1"
+    && transactionId.startsWith("debug-");
+  if (isDevBypass) {
+    return { transactionId, productId: expectedProductId, environment: "Sandbox" };
+  }
+
+  const transaction = await appStoreTransaction(transactionId, env);
+  const rejection = transactionRejection(transaction, {
+    bundleId: env.APP_STORE_BUNDLE_ID,
+    productId: expectedProductId,
+    appAccountToken: appAccountTokenFor(userId),
+    requireProduction: env.ENVIRONMENT === "production",
+  });
+  return rejection ?? {
+    transactionId: transaction.transactionId,
+    productId: transaction.productId,
+    environment: transaction.environment,
+  };
 }
 
 async function startTranslation(request: Request, env: Env): Promise<Response> {
@@ -335,28 +456,24 @@ async function startTranslation(request: Request, env: Env): Promise<Response> {
       "daily_ai_budget_reached",
     );
   }
-  let creditAcquired = false;
   try {
     if (isSample) {
       if (!(await userData.claimJobPreview(job))) {
         throw new HttpError(409, "Ehhez a könyvhöz az ingyenes fejezetet már felhasználtad.");
       }
     } else if (env.REQUIRE_TRANSLATION_ENTITLEMENTS === "1") {
-      const entitled = await userData.entitled(job.source_hash, "hu");
-      if (!entitled && job.required_credits > 0) {
-        const reservation = await userData.reserveJobCredits(job);
-        if (!reservation.ok) {
-          if (budgetReservation.acquired) await userData.releaseJobBudget(job.id);
-          return json(
-            {
-              error: "Nincs elegendő fordítási keret.",
-              requiredCredits: job.required_credits,
-              balance: reservation.balance,
-            },
-            { status: 402 },
-          );
-        }
-        creditAcquired = !reservation.alreadyReserved;
+      if (!(await userData.entitled(job.source_hash, "hu"))) {
+        if (budgetReservation.acquired) await userData.releaseJobBudget(job.id);
+        const tier = bookTierFor(job.source_characters);
+        return json(
+          {
+            error: "Ehhez a könyvhöz még nincs megvásárolt fordítás.",
+            code: "purchase_required",
+            productId: tier?.productId,
+            sourceCharacters: job.source_characters,
+          },
+          { status: 402 },
+        );
       }
     }
   } catch (error) {
@@ -377,7 +494,6 @@ async function startTranslation(request: Request, env: Env): Promise<Response> {
     job = await userData.job(job.id);
     if (job && ["queued", "starting", "running", "done"].includes(job.status)) return json({ ok: true });
     if (budgetReservation.acquired) await userData.releaseJobBudget(job?.id ?? body.id);
-    if (creditAcquired) await userData.refundJobCredits(job?.id ?? body.id);
     throw new HttpError(409, "A fordítás állapota közben megváltozott.");
   }
   try {
@@ -389,7 +505,6 @@ async function startTranslation(request: Request, env: Env): Promise<Response> {
       new Date().toISOString(),
     );
     await userData.releaseJobBudget(job.id);
-    await userData.refundJobCredits(job.id);
     throw error;
   }
   return json({ ok: true }, { status: 202 });
@@ -503,7 +618,6 @@ async function deleteAccount(request: Request, env: Env): Promise<Response> {
   await userData.cancelActiveAccountJobs(now);
   for (const job of jobs) {
     await userData.releaseJobBudget(job.id);
-    await userData.refundJobCredits(job.id);
     if (job.workflow_instance_id) {
       try {
         await (await env.TRANSLATION_WORKFLOW.get(job.workflow_instance_id)).terminate();
@@ -524,8 +638,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
     case "GET /health": return json({ ok: true, service: "nativread-api" });
     case "POST /api/auth/apple": return authApple(request, env);
     case "POST /api/upload": return upload(request, env);
-    case "GET /api/credits": return credits(request, env);
-    case "POST /api/credits/purchase": return purchase(request, env);
+    case "POST /api/purchase": return purchase(request, env);
     case "POST /api/translate": return startTranslation(request, env);
     case "GET /api/status": return status(request, env);
     case "GET /api/result": return result(request, env, context);
@@ -584,7 +697,6 @@ async function retentionSweep(env: Env): Promise<void> {
   for (const job of expired.results) {
     await env.ARTIFACTS.delete([job.source_key, ...(job.result_key ? [job.result_key] : [])]);
     await internalReleaseAIBudget(env.DB, job.id);
-    await internalRefundReservation(env.DB, job.id);
     await env.DB.prepare(
       "UPDATE jobs SET status = CASE WHEN status = 'done' THEN status ELSE 'cancelled' END, " +
       "result_key = NULL, error_code = CASE WHEN status = 'done' THEN error_code ELSE 'expired' END, " +

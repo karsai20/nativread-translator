@@ -146,9 +146,13 @@ commit SHA.
 
 ## Release gates
 
-- Keep `REQUIRE_TRANSLATION_ENTITLEMENTS=1`. The purchase endpoint intentionally
-  returns `501` until App Store Server API signed-transaction verification is
-  implemented.
+- Keep `REQUIRE_TRANSLATION_ENTITLEMENTS=1` and `ALLOW_DEV_AUTH=0`. The latter
+  also gates the purchase endpoint's local-StoreKit bypass, which must never be
+  reachable in production.
+- Set the App Store Server API secrets before selling anything:
+  `APP_STORE_ISSUER_ID`, `APP_STORE_KEY_ID`, `APP_STORE_PRIVATE_KEY` (an App
+  Store Connect **In-App Purchase** key, not the Sign in with Apple one).
+  Without them `POST /api/purchase` fails closed with a 503.
 - Set the Cloudflare account's log/analytics retention and access controls.
   EU storage/compute bindings do not by themselves force TLS termination or
   Worker execution into the EU; full edge-processing localization requires

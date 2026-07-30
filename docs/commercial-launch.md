@@ -31,35 +31,47 @@ and product decision record, not legal advice.
 - Meter source Unicode code points after EPUB markup is excluded. Do not expose
   translation chunks as a billing unit: chunk boundaries change with models and
   pipeline tuning and are not understandable to customers.
-- Define one internal credit as 1,000 source code points. Show users both the source
-  character count and the exact credit quote before purchase or confirmation.
-- Sell fixed, non-expiring consumable credit packs through StoreKit. Apple product
-  prices are fixed tiers, while a signed, versioned server quote can consume a
-  dynamic number of credits per book.
-- Reserve quoted credits atomically when a job starts. Finalize on successful
-  delivery; refund automatically on terminal failure or expiry. Never charge for a
-  retry caused by the service.
-- Give one first-chapter preview per account and source hash. Bind the quote to the
-  normalized source hash, character count, source and target languages, quality
-  mode, model-price version, credit amount, and expiry.
-- Set retail pack prices only after benchmarking at least 10–20 representative
-  EPUBs. Include input, output, refinement/retry, Apple commission, hosting,
+- **Sell one book at a time, not credits.** A credit balance asks the wrong
+  question at the moment of purchase ("will 250 credits be enough?"), strands
+  unusable remainders, and contradicts what the in-app terms already promise.
+  A length tier is chosen server-side from the measured character count, and the
+  device only learns which App Store product to buy.
+- Six consumable tiers, by source characters: ≤150k, ≤300k, ≤500k, ≤800k,
+  ≤1.2M, and ≤3M. A book above the top tier is refused at upload, because the
+  top tier stops covering its own translation cost well before that.
+  The table lives in `cloudflare/src/database.ts` (`BOOK_TIERS`) and is the only
+  place a tier is decided.
+- The price shown to the reader always comes from StoreKit's `displayPrice`,
+  never from our own table: it is the localized figure the App Store will
+  actually charge.
+- A verified transaction grants an entitlement per `(userId, sourceHash,
+  targetLanguage)`. There is no reservation to settle and no refund path: a
+  failed job keeps its entitlement, so the retry costs the customer nothing.
+- Give one first-chapter preview per account and source hash.
+- Set tier prices only after benchmarking at least 10–20 representative EPUBs.
+  Include input, output, refinement/retry, Apple commission, hosting,
   payment/tax overhead, and support; target a 65–75% contribution margin.
+  At the measured $0.91 per million source characters (`PLAN.md`,
+  gemini-3.1-flash-lite), the $11.99 tier holds ~68% contribution at its 3M
+  character cap with Hungarian VAT and the 15% Small Business commission.
 
-### Implemented placeholder flow
+### Implemented flow
 
-- `POST /api/upload` now returns a server-calculated `source-chars-v1` quote:
-  visible normalized source characters, required credits, and characters per
-  credit. Markup and internal translation chunk boundaries are excluded.
-- `GET /api/credits` returns the account balance and the 250/600/1,200-credit
-  product catalogue. Full jobs reserve the exact quote, successful consumed
-  delivery finalizes it, and failure/cancellation/expiry refunds it.
-- `POST /api/credits/purchase` provides an idempotent transaction-id grant only
-  when `STOREKIT_ALLOW_UNSIGNED_GRANTS=1`. This switch is for a trusted LAN and
-  automated tests only; keep it `0` on any public deployment.
-- The current ledger is a file-backed, single-instance launch implementation.
-  Before horizontal scaling, move purchases and reservations into a transactional
-  database with a unique StoreKit transaction-id constraint.
+- `POST /api/upload` returns the `source-chars-v1` quote and a `price` block
+  naming the tier and its App Store product id. Over the top tier it returns
+  `413 book_too_long` before a job row exists.
+- `POST /api/purchase` takes `{id, transactionId}`, looks the transaction up at
+  Apple's App Store Server API, and requires it to name our bundle, a
+  `Consumable`, the tier the book falls into, and the account's
+  `appAccountToken`. Nothing the device claims about the purchase is trusted.
+- The `book_purchases` primary key on `transaction_id` makes a replay a no-op
+  and a receipt from another account a `409`; an `AFTER INSERT` trigger writes
+  the entitlement in the same statement.
+- The app finishes a StoreKit transaction only after the backend confirms it,
+  and replays anything still unfinished on the next launch.
+- Refund and revocation notifications (App Store Server Notifications V2) are
+  not wired up. A transaction revoked before the purchase call is rejected;
+  one revoked afterwards is not yet reversed.
 
 ## Initial hosting
 
@@ -76,10 +88,10 @@ and product decision record, not legal advice.
 ## Required before paid launch
 
 1. Hungarian/EU copyright and consumer-law review of the complete customer flow.
-2. App Store Connect consumable products and server-side transaction verification.
-3. Replace the debug purchase grant with signed StoreKit transaction verification;
-   retain the implemented character quote, reservation, finalization, and refund
-   rules in a transactional production ledger.
+2. App Store Connect: the six consumable products, an In-App Purchase API key for
+   the App Store Server API, and an active Paid Applications agreement (without
+   it `Product.products(for:)` returns nothing).
+3. A sandbox purchase verified end to end against the deployed Worker.
 4. Production domain/TLS, secret management, monitoring, rate limits, encrypted
    metadata backups, and a tested restore procedure.
 5. Privacy notice, terms, deletion policy, takedown/contact process, and a data-flow

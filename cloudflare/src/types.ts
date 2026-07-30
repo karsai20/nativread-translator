@@ -89,6 +89,9 @@ export interface Env {
   COST_CEILING_USD: string;
   REQUIRE_TRANSLATION_ENTITLEMENTS: string;
   ALLOW_DEV_AUTH: string;
+  APP_STORE_BUNDLE_ID: string;
+  /** Only ever set through `wrangler dev --var`; never present in wrangler.jsonc. */
+  LOCAL_DEV?: string;
 
   APPLE_CLIENT_IDS: string;
   APPLE_TEAM_ID: string;
@@ -97,4 +100,8 @@ export interface Env {
   SESSION_SECRET: string;
   GEMINI_API_KEY: string;
   CONTAINER_INTERNAL_TOKEN: string;
+  /** App Store Connect In-App Purchase key — not the Sign in with Apple key above. */
+  APP_STORE_ISSUER_ID: string;
+  APP_STORE_KEY_ID: string;
+  APP_STORE_PRIVATE_KEY: string;
 }

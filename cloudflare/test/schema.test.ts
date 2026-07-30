@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
+import { applyMigrations } from "./migrations";
+
 let database: Database;
 
 beforeEach(async () => {
   database = new Database(":memory:", { strict: true });
-  database.exec(await Bun.file(new URL("../migrations/0001_initial.sql", import.meta.url)).text());
-  database.exec(await Bun.file(new URL("../migrations/0002_terms_acceptances.sql", import.meta.url)).text());
-  database.exec(await Bun.file(new URL("../migrations/0003_ai_budget_reservations.sql", import.meta.url)).text());
+  await applyMigrations(database);
 });
 
 afterEach(() => database.close());
@@ -45,7 +45,52 @@ function insertJob(
   );
 }
 
+function insertBookPurchase(
+  userId: string,
+  now: string,
+  transactionId = "2000000900000001",
+  sourceHash = "b".repeat(64),
+) {
+  return database.query(`
+    INSERT INTO book_purchases
+      (transaction_id, user_id, product_id, source_hash, target_language, environment, created_at)
+    VALUES (?, ?, 'com.karsai.nativread.book.t3', ?, 'hu', 'Sandbox', ?)
+    ON CONFLICT(transaction_id) DO NOTHING
+  `).run(transactionId, userId, sourceHash, now);
+}
+
 describe("D1 schema invariants", () => {
+  test("a recorded purchase grants its entitlement in the same statement", () => {
+    const { userId, now } = insertAccount();
+    insertBookPurchase(userId, now);
+
+    expect(database.query(
+      "SELECT source_hash, target_language FROM entitlements WHERE user_id = ?",
+    ).get(userId)).toEqual({ source_hash: "b".repeat(64), target_language: "hu" });
+  });
+
+  test("a replayed transaction id cannot grant a second entitlement", () => {
+    const { userId, now } = insertAccount();
+    insertBookPurchase(userId, now);
+    const replay = insertBookPurchase(userId, now, "2000000900000001", "c".repeat(64));
+
+    expect(replay.changes).toBe(0);
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM entitlements WHERE user_id = ?",
+    ).get(userId)).toEqual({ count: 1 });
+  });
+
+  test("purchases and their entitlements disappear with the account", () => {
+    const { userId, now } = insertAccount();
+    insertBookPurchase(userId, now);
+    database.query("DELETE FROM accounts WHERE user_id = ?").run(userId);
+
+    expect(database.query("SELECT COUNT(*) AS count FROM book_purchases").get())
+      .toEqual({ count: 0 });
+    expect(database.query("SELECT COUNT(*) AS count FROM entitlements").get())
+      .toEqual({ count: 0 });
+  });
+
   test("prevents overspending at the database layer", () => {
     const { userId } = insertAccount();
     expect(() => database.query(

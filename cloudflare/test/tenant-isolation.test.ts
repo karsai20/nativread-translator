@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 
+import { applyMigrations } from "./migrations";
+
 import { UserDataRepository } from "../src/database";
 import type { JobRow } from "../src/types";
 
@@ -17,9 +19,7 @@ let d1: D1Database;
 
 beforeEach(async () => {
   database = new Database(":memory:", { strict: true });
-  database.exec(await Bun.file(new URL("../migrations/0001_initial.sql", import.meta.url)).text());
-  database.exec(await Bun.file(new URL("../migrations/0002_terms_acceptances.sql", import.meta.url)).text());
-  database.exec(await Bun.file(new URL("../migrations/0003_ai_budget_reservations.sql", import.meta.url)).text());
+  await applyMigrations(database);
   d1 = sqliteD1(database);
 
   insertAccount(USER_A);
@@ -131,27 +131,40 @@ describe("authenticated D1 tenant boundary", () => {
     });
   });
 
-  test("cannot refund another account's credits or AI budget", async () => {
+  test("cannot release another account's AI budget", async () => {
     const now = new Date().toISOString();
-    database.query(`
-      INSERT INTO credit_reservations
-        (job_id, user_id, source_hash, credits, quote_version, status, reserved_at)
-      VALUES (?, ?, ?, 25, 'source-chars-v1', 'reserved', ?)
-    `).run(JOB_B, USER_B, SOURCE_B, now);
     database.query(
       "INSERT INTO ai_budget_reservations VALUES (?, '2026-07-23', 300, 0, 'reserved', ?, NULL)",
     ).run(JOB_B, now);
 
     const userA = new UserDataRepository(d1, USER_A);
-    await userA.refundJobCredits(JOB_B);
     await userA.releaseJobBudget(JOB_B);
 
     expect(database.query(
-      "SELECT status FROM credit_reservations WHERE job_id = ?",
-    ).get(JOB_B)).toEqual({ status: "reserved" });
-    expect(database.query(
       "SELECT status FROM ai_budget_reservations WHERE job_id = ?",
     ).get(JOB_B)).toEqual({ status: "reserved" });
+  });
+
+  test("a transaction id spent by one account cannot be replayed by another", async () => {
+    const userA = new UserDataRepository(d1, USER_A);
+    const userB = new UserDataRepository(d1, USER_B);
+    const jobA = await userA.job(JOB_A);
+    const jobB = await userB.job(JOB_B);
+    const purchase = {
+      transactionId: "2000000900000001",
+      productId: "com.karsai.nativread.book.t1",
+      environment: "Sandbox" as const,
+    };
+
+    expect(await userA.recordBookPurchase(jobA!, purchase)).toEqual({ applied: true });
+    // The same receipt sent twice by its owner is a retry, not a second book.
+    expect(await userA.recordBookPurchase(jobA!, purchase)).toEqual({ applied: false });
+    expect(await userB.recordBookPurchase(jobB!, purchase))
+      .toEqual({ applied: false, conflict: true });
+
+    expect(database.query(
+      "SELECT COUNT(*) AS count FROM entitlements WHERE user_id = ?",
+    ).get(USER_B)).toEqual({ count: 0 });
   });
 
   test("account cancellation and deletion stay inside the authenticated account", async () => {
@@ -183,8 +196,11 @@ describe("authenticated D1 tenant boundary", () => {
 
     await expect(userA.claimJobPreview(foreignJob!))
       .rejects.toThrow("Cross-tenant job");
-    await expect(userA.reserveJobCredits(foreignJob!))
-      .rejects.toThrow("Cross-tenant job");
+    await expect(userA.recordBookPurchase(foreignJob!, {
+      transactionId: "2000000000000001",
+      productId: "com.karsai.nativread.book.t1",
+      environment: "Sandbox",
+    })).rejects.toThrow("Cross-tenant job");
   });
 
   test("request handlers cannot issue raw D1 statements or call internal helpers", async () => {

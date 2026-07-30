@@ -133,7 +133,8 @@ bash scripts/setup-nativread-backend.sh
 The first run creates `.env.nativread`; add `PROVIDER_API_KEY`, then run the script
 again. It listens on `http://<host>:48218` by default. The iOS Simulator uses
 `http://127.0.0.1:48218` when entered in NativRead Settings; on a real iPhone set
-the Mac/server LAN IP there instead. For a no-charge end-to-end purchase test, set
-`REQUIRE_TRANSLATION_ENTITLEMENTS=1` and `STOREKIT_ALLOW_UNSIGNED_GRANTS=1` only on
-the trusted LAN backend. See
+the Mac/server LAN IP there instead. Leave `REQUIRE_TRANSLATION_ENTITLEMENTS=0`
+here: this self-hosted backend sells nothing, so the app offers the whole book
+directly. Per-book App Store purchases live on the Cloudflare Worker
+(`cloudflare/`), which is where a purchase is verified with Apple. See
 [`docs/nativread-backend-setup.md`](./docs/nativread-backend-setup.md).

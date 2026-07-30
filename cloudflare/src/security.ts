@@ -94,6 +94,25 @@ export async function hmacSubject(secret: string, value: string): Promise<string
   return base64Url(new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value))));
 }
 
+/**
+ * The UUID the app attaches to a StoreKit purchase, derived from the account id
+ * so it needs neither storage nor a schema column. It binds the receipt to the
+ * buyer: a transaction id lifted from someone else's device carries their token,
+ * not this account's, and is refused before it can grant anything.
+ *
+ * The account id is already a SHA-256 hash, so this exposes nothing new.
+ */
+export function appAccountTokenFor(userId: string): string {
+  const hex = userId.slice(0, 32);
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join("-");
+}
+
 export function requestId(request: Request): string {
   const provided = request.headers.get("cf-ray") ?? request.headers.get("x-request-id") ?? "";
   return /^[A-Za-z0-9._:-]{1,80}$/u.test(provided) ? provided : crypto.randomUUID();
@@ -155,6 +174,18 @@ export async function requireUser(request: Request, env: Env): Promise<string> {
     .first<{ ok: number }>();
   if (!account) throw new HttpError(401, "A munkamenet már nem érvényes.");
   return userId;
+}
+
+/** Best-effort abuse trail. The hourly retention sweep prunes it. */
+export async function recordSecurityEvent(
+  db: D1Database,
+  userId: string | null,
+  eventType: string,
+  detail: string,
+): Promise<void> {
+  await db.prepare(
+    "INSERT INTO security_events (user_id, event_type, detail, created_at) VALUES (?, ?, ?, ?)",
+  ).bind(userId, eventType, detail.slice(0, 400), new Date().toISOString()).run();
 }
 
 export async function ensureAccount(db: D1Database, userId: string): Promise<void> {

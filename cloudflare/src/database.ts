@@ -1,11 +1,31 @@
 import type { TermsAcceptanceInput } from "./legal";
 import type { Env, JobRow } from "./types";
 
-export const CREDIT_PRODUCTS = [
-  { productId: "com.karsai.nativread.credits.250", credits: 250 },
-  { productId: "com.karsai.nativread.credits.600", credits: 600 },
-  { productId: "com.karsai.nativread.credits.1200", credits: 1_200 },
+/**
+ * Length-tiered per-book consumables. A book is priced once, at upload, from the
+ * source character count the metering pass already produces — Apple product prices
+ * are fixed tiers, so the tier is chosen server-side and the device only learns
+ * which product to buy.
+ *
+ * Ordered by ascending limit; `bookTierFor` takes the first tier that fits.
+ * Anything above the last tier is refused at upload, because the top tier would
+ * stop covering its own translation cost.
+ */
+export const BOOK_TIERS = [
+  { tier: 1, maxSourceCharacters: 150_000, productId: "com.karsai.nativread.book.t1" },
+  { tier: 2, maxSourceCharacters: 300_000, productId: "com.karsai.nativread.book.t2" },
+  { tier: 3, maxSourceCharacters: 500_000, productId: "com.karsai.nativread.book.t3" },
+  { tier: 4, maxSourceCharacters: 800_000, productId: "com.karsai.nativread.book.t4" },
+  { tier: 5, maxSourceCharacters: 1_200_000, productId: "com.karsai.nativread.book.t5" },
+  { tier: 6, maxSourceCharacters: 3_000_000, productId: "com.karsai.nativread.book.t6" },
 ] as const;
+
+export type BookTier = (typeof BOOK_TIERS)[number];
+
+/** The tier a book falls into, or undefined when it is longer than the top tier covers. */
+export function bookTierFor(sourceCharacters: number): BookTier | undefined {
+  return BOOK_TIERS.find((tier) => sourceCharacters <= tier.maxSourceCharacters);
+}
 
 export interface PendingJobInput {
   id: string;
@@ -24,6 +44,18 @@ export interface PendingJobInput {
 export interface AccountJobReference {
   id: string;
   workflow_instance_id: string | null;
+}
+
+export interface BookPurchaseInput {
+  transactionId: string;
+  productId: string;
+  environment: "Production" | "Sandbox";
+}
+
+export interface BookPurchaseResult {
+  applied: boolean;
+  /** The transaction id belongs to another account or another book. */
+  conflict?: boolean;
 }
 
 /**
@@ -87,10 +119,6 @@ export class UserDataRepository {
     ).run();
   }
 
-  async getCreditAccount() {
-    return creditAccount(this.db, this.userId);
-  }
-
   async entitled(sourceHash: string, targetLanguage: string): Promise<boolean> {
     return hasEntitlement(this.db, this.userId, sourceHash, targetLanguage);
   }
@@ -130,16 +158,38 @@ export class UserDataRepository {
     ).bind(new Date().toISOString(), jobId, this.userId).run();
   }
 
-  async reserveJobCredits(job: JobRow): Promise<ReservationResult> {
+  /**
+   * Record a verified App Store transaction. The primary key on transaction_id
+   * makes a replay a no-op, and the AFTER INSERT trigger grants the entitlement
+   * in the same statement, so a purchase can never be half-applied.
+   */
+  async recordBookPurchase(job: JobRow, purchase: BookPurchaseInput): Promise<BookPurchaseResult> {
     this.assertOwnedJob(job);
-    return reserveCredits(this.db, job);
-  }
+    // RETURNING, not the affected-row count: the entitlement trigger also writes
+    // a row, and how that is counted differs between D1 and a local SQLite.
+    const inserted = await this.db.prepare(
+      "INSERT INTO book_purchases " +
+      "(transaction_id, user_id, product_id, source_hash, target_language, environment, created_at) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(transaction_id) DO NOTHING " +
+      "RETURNING transaction_id",
+    ).bind(
+      purchase.transactionId,
+      this.userId,
+      purchase.productId,
+      job.source_hash,
+      job.target_language,
+      purchase.environment,
+      new Date().toISOString(),
+    ).first<{ transaction_id: string }>();
+    if (inserted) return { applied: true };
 
-  async refundJobCredits(jobId: string): Promise<void> {
-    await this.db.prepare(
-      "UPDATE credit_reservations SET status = 'refunded', settled_at = ? " +
-      "WHERE job_id = ? AND user_id = ? AND status = 'reserved'",
-    ).bind(new Date().toISOString(), jobId, this.userId).run();
+    // The transaction id was already spent. Only the same owner buying the same
+    // book is a replay; anything else is one account claiming another's receipt.
+    const existing = await this.db.prepare(
+      "SELECT user_id, source_hash FROM book_purchases WHERE transaction_id = ?",
+    ).bind(purchase.transactionId).first<{ user_id: string; source_hash: string }>();
+    const isReplay = existing?.user_id === this.userId && existing.source_hash === job.source_hash;
+    return isReplay ? { applied: false } : { applied: false, conflict: true };
   }
 
   async claimJobPreview(job: JobRow): Promise<boolean> {
@@ -222,25 +272,6 @@ export async function internalJobById(db: D1Database, jobId: string): Promise<Jo
   return db.prepare("SELECT * FROM jobs WHERE id = ?").bind(jobId).first<JobRow>();
 }
 
-async function creditAccount(db: D1Database, userId: string) {
-  const row = await db.prepare(
-    "SELECT purchased_credits, reserved_credits, spent_credits FROM credit_accounts WHERE user_id = ?",
-  ).bind(userId).first<{
-    purchased_credits: number;
-    reserved_credits: number;
-    spent_credits: number;
-  }>();
-  const purchasedCredits = row?.purchased_credits ?? 0;
-  const reservedCredits = row?.reserved_credits ?? 0;
-  const spentCredits = row?.spent_credits ?? 0;
-  return {
-    balance: purchasedCredits - reservedCredits - spentCredits,
-    purchasedCredits,
-    reservedCredits,
-    spentCredits,
-  };
-}
-
 async function hasEntitlement(
   db: D1Database,
   userId: string,
@@ -296,10 +327,6 @@ async function recordTermsAcceptance(
     throw new Error("Terms acceptance does not match the immutable legal version");
   }
 }
-
-export type ReservationResult =
-  | { ok: true; alreadyReserved: boolean }
-  | { ok: false; balance: number };
 
 export type AIBudgetReservationResult =
   | { ok: true; acquired: boolean }
@@ -388,64 +415,6 @@ export async function internalReleaseAIBudget(
   ).bind(new Date().toISOString(), jobId).run();
 }
 
-/**
- * Reserve an immutable upload quote. D1 serializes writes; the unique job row
- * makes concurrent starts idempotent, while the conditional account update
- * prevents the balance from going negative.
- */
-async function reserveCredits(db: D1Database, job: JobRow): Promise<ReservationResult> {
-  const now = new Date().toISOString();
-  try {
-    const claimed = await db.prepare(
-      "INSERT INTO credit_reservations " +
-      "(job_id, user_id, source_hash, credits, quote_version, status, reserved_at) " +
-      "VALUES (?, ?, ?, ?, ?, 'reserved', ?) " +
-      "ON CONFLICT(job_id) DO UPDATE SET status = 'reserved', reserved_at = excluded.reserved_at, settled_at = NULL " +
-      "WHERE credit_reservations.status = 'refunded' " +
-      "AND credit_reservations.user_id = excluded.user_id " +
-      "AND credit_reservations.source_hash = excluded.source_hash " +
-      "AND credit_reservations.credits = excluded.credits " +
-      "AND credit_reservations.quote_version = excluded.quote_version " +
-      "RETURNING job_id",
-    ).bind(
-      job.id,
-      job.user_id,
-      job.source_hash,
-      job.required_credits,
-      job.quote_version,
-      now,
-    ).first<{ job_id: string }>();
-    if (claimed) return { ok: true, alreadyReserved: false };
-  } catch (error) {
-    if (String(error).includes("CHECK constraint failed")) {
-      return {
-        ok: false,
-        balance: (await creditAccount(db, job.user_id)).balance,
-      };
-    }
-    throw error;
-  }
-
-  const existing = await db.prepare(
-    "SELECT user_id, status, credits, source_hash, quote_version " +
-    "FROM credit_reservations WHERE job_id = ?",
-  ).bind(job.id).first<{
-    user_id: string;
-    status: string;
-    credits: number;
-    source_hash: string;
-    quote_version: string;
-  }>();
-  const matches = existing?.user_id === job.user_id
-    && existing.credits === job.required_credits
-    && existing.source_hash === job.source_hash
-    && existing.quote_version === job.quote_version;
-  if (!matches || (existing.status !== "reserved" && existing.status !== "finalized")) {
-    throw new Error("Credit reservation does not match immutable quote");
-  }
-  return { ok: true, alreadyReserved: true };
-}
-
 async function claimPreview(db: D1Database, job: JobRow): Promise<boolean> {
   const result = await db.prepare(
     "INSERT OR IGNORE INTO preview_claims (user_id, source_hash, job_id, created_at) VALUES (?, ?, ?, ?)",
@@ -457,44 +426,17 @@ async function claimPreview(db: D1Database, job: JobRow): Promise<boolean> {
   return existing?.job_id === job.id;
 }
 
-export async function settleSuccess(db: D1Database, job: JobRow): Promise<void> {
-  const reservation = await db.prepare(
-    "SELECT credits, status FROM credit_reservations WHERE job_id = ?",
-  ).bind(job.id).first<{ credits: number; status: string }>();
-  const now = new Date().toISOString();
-  if (reservation?.status === "reserved") {
-    const settled = await db.prepare(
-      "UPDATE credit_reservations SET status = 'finalized', settled_at = ? " +
-      "WHERE job_id = ? AND status = 'reserved'",
-    ).bind(now, job.id).run();
-    if ((settled.meta.changes ?? 0) === 1) {
-      await db.prepare(
-        "INSERT OR IGNORE INTO entitlements (user_id, source_hash, target_language, created_at) VALUES (?, ?, ?, ?)",
-      ).bind(job.user_id, job.source_hash, job.target_language, now).run();
-    }
-  } else if (reservation?.status === "finalized") {
-    await db.prepare(
-      "INSERT OR IGNORE INTO entitlements (user_id, source_hash, target_language, created_at) VALUES (?, ?, ?, ?)",
-    ).bind(job.user_id, job.source_hash, job.target_language, now).run();
-  } else if (!job.sample) {
-    await db.prepare(
-      "INSERT OR IGNORE INTO entitlements (user_id, source_hash, target_language, created_at) VALUES (?, ?, ?, ?)",
-    ).bind(job.user_id, job.source_hash, job.target_language, now).run();
-  }
-}
-
 /**
- * Internal-only global cleanup. Authenticated request handlers must use
- * UserDataRepository.refundJobCredits(), which includes the user_id predicate.
+ * A delivered full translation confirms the entitlement the purchase already
+ * granted, so this is a no-op on the normal path. It still runs because a
+ * translation may also be produced without a purchase — a self-hosted
+ * deployment with REQUIRE_TRANSLATION_ENTITLEMENTS=0 — and that book must stay
+ * re-downloadable too. A failed paid job needs no refund: the entitlement
+ * survives, so the retry costs the customer nothing.
  */
-export async function internalRefundReservation(db: D1Database, jobId: string): Promise<void> {
-  const reservation = await db.prepare(
-    "SELECT user_id, credits, status FROM credit_reservations WHERE job_id = ?",
-  ).bind(jobId).first<{ user_id: string; credits: number; status: string }>();
-  if (reservation?.status !== "reserved") return;
-  const now = new Date().toISOString();
+export async function settleSuccess(db: D1Database, job: JobRow): Promise<void> {
+  if (job.sample) return;
   await db.prepare(
-    "UPDATE credit_reservations SET status = 'refunded', settled_at = ? " +
-    "WHERE job_id = ? AND status = 'reserved'",
-  ).bind(now, jobId).run();
+    "INSERT OR IGNORE INTO entitlements (user_id, source_hash, target_language, created_at) VALUES (?, ?, ?, ?)",
+  ).bind(job.user_id, job.source_hash, job.target_language, new Date().toISOString()).run();
 }

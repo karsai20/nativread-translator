@@ -3,10 +3,10 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import {
   finalizeAIBudget,
   internalJobById,
-  internalRefundReservation,
   internalReleaseAIBudget,
   settleSuccess,
 } from "./database";
+import { translatorContainer } from "./container";
 import { resultKey, safeError } from "./security";
 import type {
   ContainerResultMetadata,
@@ -87,7 +87,7 @@ export class TranslationWorkflow extends WorkflowEntrypoint<Env, TranslationWork
           const source = await this.env.ARTIFACTS.get(prepared.sourceKey);
           if (!source?.body) return { ok: false, errorCode: "source_missing" } as const;
 
-          const container = this.env.TRANSLATOR_CONTAINER.jurisdiction("eu").getByName(jobId);
+          const container = translatorContainer(this.env, jobId);
           const response = await container.fetch("http://container/run", {
             method: "POST",
             headers: {
@@ -146,7 +146,6 @@ export class TranslationWorkflow extends WorkflowEntrypoint<Env, TranslationWork
           jobId,
         ).run();
         await internalReleaseAIBudget(this.env.DB, jobId);
-        await internalRefundReservation(this.env.DB, jobId);
       });
       return;
     }
