@@ -1,0 +1,10 @@
+# Local development only. Copy to cloudflare/.dev.vars; never commit real values.
+ENVIRONMENT=development
+ALLOW_DEV_AUTH=1
+APPLE_CLIENT_IDS=com.karsai.nativread
+SESSION_SECRET=replace-with-at-least-32-random-characters
+GEMINI_API_KEY=replace-me
+CONTAINER_INTERNAL_TOKEN=replace-with-at-least-32-random-characters
+APPLE_TEAM_ID=replace-me
+APPLE_KEY_ID=replace-me
+APPLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nreplace-me\n-----END PRIVATE KEY-----"

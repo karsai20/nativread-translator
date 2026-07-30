@@ -6,7 +6,7 @@
 //   <opf>                         manifest (id -> href) + spine (ordered idrefs)
 //   ... XHTML content items, CSS, images
 //
-// We mirror Quire's container -> OPF -> spine flow so the design transfers to Swift.
+// We mirror NativRead's container -> OPF -> spine flow so the design transfers to Swift.
 // parseEpub gives the ordered spine of XHTML items; writeEpub rebuilds the archive
 // with translated XHTML swapped in and everything else copied verbatim.
 
@@ -15,6 +15,33 @@ import { XMLParser } from "fast-xml-parser";
 
 const MIMETYPE = "application/epub+zip";
 const CONTAINER_PATH = "META-INF/container.xml";
+const ZIP_EOCD_SIGNATURE = 0x06054b50;
+const ZIP_CENTRAL_FILE_SIGNATURE = 0x02014b50;
+const ZIP_EOCD_MIN_BYTES = 22;
+const ZIP_MAX_COMMENT_BYTES = 65_535;
+
+export interface EpubArchiveLimits {
+  /** Compressed archive bytes accepted by the parser. */
+  maxArchiveBytes: number;
+  /** Central-directory entries accepted before any decompression. */
+  maxEntries: number;
+  /** Sum of central-directory uncompressed sizes. */
+  maxUncompressedBytes: number;
+}
+
+/** Defaults target prose EPUBs while leaving ample room for fonts and images. */
+export const DEFAULT_EPUB_ARCHIVE_LIMITS: Readonly<EpubArchiveLimits> = {
+  maxArchiveBytes: 32 * 1024 * 1024,
+  maxEntries: 2_000,
+  maxUncompressedBytes: 128 * 1024 * 1024,
+};
+
+export class EpubArchiveLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EpubArchiveLimitError";
+  }
+}
 
 const xml = new XMLParser({
   ignoreAttributes: false,
@@ -69,7 +96,115 @@ function asArray<T>(v: T | T[] | undefined): T[] {
   return Array.isArray(v) ? v : [v];
 }
 
-export function parseEpub(bytes: Uint8Array): Epub {
+function unsafeArchivePath(path: string): boolean {
+  if (!path || path.includes("\0") || path.startsWith("/") || path.startsWith("\\")) return true;
+  if (/^[a-z]:[\\/]/i.test(path)) return true;
+  return path.replace(/\\/g, "/").split("/").some((segment) => segment === "..");
+}
+
+function findEndOfCentralDirectory(view: DataView): number {
+  const start = view.byteLength - ZIP_EOCD_MIN_BYTES;
+  const lowerBound = Math.max(0, start - ZIP_MAX_COMMENT_BYTES);
+  for (let offset = start; offset >= lowerBound; offset -= 1) {
+    if (view.getUint32(offset, true) === ZIP_EOCD_SIGNATURE) return offset;
+  }
+  throw new Error("Invalid EPUB: ZIP central directory is missing");
+}
+
+/**
+ * Read only ZIP metadata and reject dangerous archives before `unzipSync` can
+ * allocate their advertised output. ZIP64 and multi-disk archives are not
+ * useful for an EPUB upload and are rejected rather than partially parsed.
+ */
+export function assertSafeEpubArchive(
+  bytes: Uint8Array,
+  limits: EpubArchiveLimits = DEFAULT_EPUB_ARCHIVE_LIMITS,
+): void {
+  if (bytes.byteLength > limits.maxArchiveBytes) {
+    throw new EpubArchiveLimitError(
+      `EPUB exceeds the ${limits.maxArchiveBytes}-byte compressed-size limit`,
+    );
+  }
+  if (bytes.byteLength < ZIP_EOCD_MIN_BYTES) {
+    throw new Error("Invalid EPUB: ZIP archive is truncated");
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const eocdOffset = findEndOfCentralDirectory(view);
+  const diskNumber = view.getUint16(eocdOffset + 4, true);
+  const centralDisk = view.getUint16(eocdOffset + 6, true);
+  const entriesOnDisk = view.getUint16(eocdOffset + 8, true);
+  const entryCount = view.getUint16(eocdOffset + 10, true);
+  const centralSize = view.getUint32(eocdOffset + 12, true);
+  const centralOffset = view.getUint32(eocdOffset + 16, true);
+
+  if (
+    diskNumber !== 0
+    || centralDisk !== 0
+    || entriesOnDisk !== entryCount
+    || entryCount === 0xffff
+    || centralSize === 0xffffffff
+    || centralOffset === 0xffffffff
+  ) {
+    throw new EpubArchiveLimitError("Multi-disk and ZIP64 EPUB archives are not supported");
+  }
+  if (entryCount > limits.maxEntries) {
+    throw new EpubArchiveLimitError(
+      `EPUB contains ${entryCount} entries; limit is ${limits.maxEntries}`,
+    );
+  }
+  if (centralOffset + centralSize > eocdOffset) {
+    throw new Error("Invalid EPUB: ZIP central directory is out of bounds");
+  }
+
+  const decoder = new TextDecoder();
+  const names = new Set<string>();
+  let offset = centralOffset;
+  let totalUncompressed = 0;
+
+  for (let index = 0; index < entryCount; index += 1) {
+    if (offset + 46 > eocdOffset || view.getUint32(offset, true) !== ZIP_CENTRAL_FILE_SIGNATURE) {
+      throw new Error("Invalid EPUB: malformed ZIP central directory");
+    }
+
+    const uncompressedBytes = view.getUint32(offset + 24, true);
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const nextOffset = offset + 46 + nameLength + extraLength + commentLength;
+    if (nameLength === 0 || nextOffset > eocdOffset) {
+      throw new Error("Invalid EPUB: malformed ZIP entry metadata");
+    }
+
+    const nameBytes = bytes.subarray(offset + 46, offset + 46 + nameLength);
+    const name = decoder.decode(nameBytes);
+    if (unsafeArchivePath(name)) {
+      throw new EpubArchiveLimitError(`EPUB contains an unsafe archive path: ${name}`);
+    }
+    if (names.has(name)) {
+      throw new Error(`Invalid EPUB: duplicate ZIP entry ${name}`);
+    }
+    names.add(name);
+
+    totalUncompressed += uncompressedBytes;
+    if (totalUncompressed > limits.maxUncompressedBytes) {
+      throw new EpubArchiveLimitError(
+        `EPUB expands beyond the ${limits.maxUncompressedBytes}-byte limit`,
+      );
+    }
+    offset = nextOffset;
+  }
+
+  if (offset !== centralOffset + centralSize) {
+    throw new Error("Invalid EPUB: ZIP central-directory size mismatch");
+  }
+}
+
+export function parseEpub(
+  bytes: Uint8Array,
+  limits: EpubArchiveLimits = DEFAULT_EPUB_ARCHIVE_LIMITS,
+): Epub {
+  assertSafeEpubArchive(bytes, limits);
   const entries = unzipSync(bytes);
 
   const containerBytes = entries[CONTAINER_PATH];

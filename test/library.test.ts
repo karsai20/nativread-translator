@@ -3,11 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { saveToLibrary, listLibrary, findBySourceHash, hashSource } from "../lib/core/library.ts";
+import { saveToLibrary, listLibrary, findBySourceHash, getLibraryEntry, hashSource } from "../lib/core/library.ts";
 import { buildFixtureEpub } from "./helpers/epub-fixture.ts";
 
 function freshDir(): string {
-  return mkdtempSync(join(tmpdir(), "quire-lib-"));
+  return mkdtempSync(join(tmpdir(), "nativread-lib-"));
 }
 
 test("saves a book and lists it back", () => {
@@ -41,6 +41,42 @@ test("dedup: an identical source is found by hash (so it is not re-translated)",
 
   expect(findBySourceHash(dir, hash)?.id).toBe("abc");
   expect(findBySourceHash(dir, "nonexistent")).toBeUndefined();
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("dedup is scoped by user", () => {
+  const dir = freshDir();
+  const bytes = buildFixtureEpub();
+  const hash = hashSource(bytes);
+  saveToLibrary({
+    libraryDir: dir,
+    id: "abc",
+    title: "T",
+    sourceHash: hash,
+    userId: "user-a",
+    words: 1,
+    costUsd: 0,
+    epubBytes: bytes,
+  });
+
+  expect(findBySourceHash(dir, hash, "user-a")?.id).toBe("abc");
+  expect(findBySourceHash(dir, hash, "user-b")).toBeUndefined();
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("a sample is listed in the library but excluded from dedup", () => {
+  const dir = freshDir();
+  const bytes = buildFixtureEpub();
+  const hash = hashSource(bytes);
+  saveToLibrary({ libraryDir: dir, id: "smp", title: "Sample", sourceHash: hash, words: 1, costUsd: 0, epubBytes: bytes, sample: true });
+
+  // Visible in the library (so the user can find/read it)...
+  expect(listLibrary(dir)).toHaveLength(1);
+  expect(getLibraryEntry(dir, "smp")?.sample).toBe(true);
+  // ...but it must NOT count as "already translated" — a full upload should still proceed.
+  expect(findBySourceHash(dir, hash)).toBeUndefined();
 
   rmSync(dir, { recursive: true, force: true });
 });

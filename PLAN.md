@@ -1,22 +1,22 @@
-# quire-translator — modern web book translator (standalone product + validation gate + reusable core)
+# nativread-translator — modern web book translator (standalone product + validation gate + reusable core)
 
 Status: PLAN (agent-executable)
 Created: 2026-06-22 · Updated: 2026-06-22 (modern stack + deploy posture)
-Parent project: Quire (iOS EPUB reader). See `~/.gstack/projects/karsai20-quire/karsai-main-design-20260622-122533.md`.
+Parent project: NativRead (iOS EPUB reader). See `../nativread/docs/translator-plan.md`.
 
 ## Why this exists
 
 A **standalone, modern web book translator** — good enough to stand on its own,
-independent of Quire. It does three jobs:
+independent of NativRead. It does three jobs:
 
 1. **Be a genuinely good, modern product.** Best-in-class UI, usable by a
    non-technical reader (the builder's mother). Quality of translation and of the
    experience both matter.
-2. **De-risk Quire's biggest bet.** Whether chunked AI translation produces Hungarian
+2. **De-risk NativRead's biggest bet.** Whether chunked AI translation produces Hungarian
    a native reader actually accepts is unvalidated. This tool answers that before any
-   iOS rebuild — a HARD GATE before Quire Phase 0.
+   iOS rebuild — a HARD GATE before NativRead Phase 0.
 3. **Produce a reusable translation core.** The pipeline design (chunking, markup
-   preservation, glossary carry, partial-failure resume) is the port spec Quire's
+   preservation, glossary carry, partial-failure resume) is the port spec NativRead's
    Phase 2 follows. (Design ports, not literal code — different language.)
 
 ## Stack (decided)
@@ -27,7 +27,7 @@ independent of Quire. It does three jobs:
   implement with shadcn components.
 - **Translation core:** a clean framework-agnostic TS module under `lib/core/` — server
   API routes call it; it has no Next/UI dependencies so it stays portable and unit-testable.
-- **EPUB:** JS parsing (`jszip` + an XML parser, mirroring Quire's container → OPF →
+- **EPUB:** JS parsing (`jszip` + an XML parser, mirroring NativRead's container → OPF →
   spine flow). Honest tradeoff: JS EPUB libs are weaker than Python's `ebooklib`; we
   accept that to get shadcn-grade UI, and keep EPUB handling isolated in `lib/core/epub.ts`
   so it can be hardened independently.
@@ -68,7 +68,7 @@ constraints:
 ## Architecture
 
 ```
-quire-translator/
+nativread-translator/
 ├── PLAN.md
 ├── .env.example                 (PROVIDER_API_KEY=... — shared household key; gitignored)
 ├── app/                         Next.js App Router
@@ -80,7 +80,7 @@ quire-translator/
 ├── components/                  shadcn/ui components + app composites
 │   └── ui/                      shadcn primitives
 ├── lib/
-│   └── core/                    ← REUSABLE heart (port target for Quire Phase 2)
+│   └── core/                    ← REUSABLE heart (port target for NativRead Phase 2)
 │       ├── epub.ts              container/OPF/spine parse; read+write XHTML items
 │       ├── chunker.ts           split spine-item XHTML into model-sized chunks
 │       ├── markup.ts            tag-protection: inline tags ↔ placeholder tokens
@@ -118,6 +118,36 @@ job: re-stitch translated XHTML ─► translated EPUB ─► reader (bilingual 
 - [ ] Persistent household library works: a translated book stays available so it is
       not re-translated; reachable from another household device on the LAN.
 
+## Model and pipeline decisions (measured 2026-07-28, `bun run eval`)
+
+Measured on *Lord of Mysteries Vol. 1* (421k words, 433 chunks), 12 sampled chunks per
+config, plus Wilde's *Dorian Gray* chapter 1 read against Kosztolányi's translation.
+
+| model | $/book | s/chunk | guard failures |
+|---|---|---|---|
+| **gemini-3.1-flash-lite** (chosen) | **$2.18** | **6.7** | 0/12 |
+| gemini-2.5-flash (previous default) | $7.67 | 22.1 | 0/12 |
+| gemini-3.5-flash-lite | $3.15 | 27.8 | 6/12 |
+| gemini-3.6-flash | $15.73 | 12.6 | 0/12 |
+
+- **Draft/refine model: `gemini-3.1-flash-lite`.** Not merely the cheapest: the only one of
+  the three finalists whose output was complete and typographically consistent. 3.6-flash
+  dropped an entire paragraph of dialogue and produced a bare article error ("a orgona") at
+  7x the price; 2.5-flash mixed dash and quote dialogue punctuation inside one passage.
+- **Escalation model: `gemini-3.6-flash`.** Its capability is worth paying for on the few
+  chunks the validators flag, where its sloppiness is re-checked by the length band.
+- **Thinking: `minimal`.** Gemini bills thought tokens at the output rate; measured on
+  3.6-flash, one sentence spent 731 thinking tokens against 16 tokens of answer. The wire
+  shape differs per model family — `bun run eval:probe` re-derives it.
+- **Batch API: rejected.** It halves price and changes nothing about quality. At $2.18 and
+  ~12 minutes per book it would save ~$1.09 in exchange for hours of latency, a second
+  permanent code path, and the loss of per-chunk resume, ETA and pause. Revisit if the
+  model tier moves up (3.6-flash batch would save $7.86/book) or volume passes ~50
+  books/month.
+- **Known residual:** roughly 5% of generations pick a wrong-but-plausible word ("lilac" →
+  "hársfák" instead of "orgona"). It is not temperature and not the refine pass — both were
+  measured. No local validator can catch this class; only a judge or a reader can.
+
 ## How an agent should execute this (subagent lanes)
 
 Block-by-block, each block green-tested before the next.
@@ -144,12 +174,12 @@ Then sequential:
 Lanes A/B/C own disjoint paths (`lib/core` / `app/api` / `app`+`components`) — safe to
 parallelize after Block 0.
 
-## Output back to Quire
+## Output back to NativRead
 
 When the quality verdict is in, write a one-paragraph result to
-`~/.gstack/projects/karsai20-quire/` (quality acceptable? failure modes? cost/book?) so
-Quire's Phase 0 proceeds with confidence or the direction changes. The proven
-chunking/glossary/markup/resume design is the port spec for Quire's Phase 2.
+`../nativread/docs/` (quality acceptable? failure modes? cost/book?) so
+NativRead's Phase 0 proceeds with confidence or the direction changes. The proven
+chunking/glossary/markup/resume design is the port spec for NativRead's Phase 2.
 
 ## Deployment (decided: private Proxmox homelab, household LAN)
 

@@ -9,16 +9,17 @@ import type {
   TranslateChunkInput,
   TranslateChunkOutput,
   RefineChunkInput,
-  ResolveGlossaryInput,
+  EstimateChunkInput,
+  EstimateChunkOutput,
 } from "../translator";
-import type { GlossaryMap } from "../glossary";
 import { PLACEHOLDER_OPEN, PLACEHOLDER_CLOSE, BLOCK_MARKER_OPEN, BLOCK_MARKER_CLOSE } from "../markup";
 import { estimateTokens } from "../cost";
 
-export const FAKE_PREFIX = "hu ";
+// Accent-bearing, visibly synthetic marker: the blocking language guard should
+// accept placeholder output during an end-to-end dry run without confusing it
+// with a real literary translation.
+export const FAKE_PREFIX = "tesztfordítás: ";
 export const FAKE_REFINE_TAG = "+";
-/** Deterministic canonical rendering the fake assigns to each recurring term. */
-export const fakeRendering = (term: string): string => `HU_${term.replace(/\s+/g, "_")}`;
 
 // A "word" that contains any marker/token PUA char is preserved untouched.
 const PRESERVE_RE = new RegExp(`[${PLACEHOLDER_OPEN}${PLACEHOLDER_CLOSE}${BLOCK_MARKER_OPEN}${BLOCK_MARKER_CLOSE}]`);
@@ -59,10 +60,13 @@ export class FakeTranslator implements Translator {
     };
   }
 
-  async resolveGlossary(input: ResolveGlossaryInput): Promise<GlossaryMap> {
-    // Deterministic canonical rendering per term so glossary-learning is observable.
-    const out: GlossaryMap = {};
-    for (const term of input.terms) out[term] = fakeRendering(term);
-    return out;
+  async estimateChunk(input: EstimateChunkInput): Promise<EstimateChunkOutput> {
+    // The fake judges its own deterministic output as publishable, so selective
+    // refinement skips the polish pass (the real provider grades for real).
+    return {
+      needsRefine: false,
+      score: 5,
+      usage: { inputTokens: estimateTokens(input.draft), outputTokens: 1 },
+    };
   }
 }

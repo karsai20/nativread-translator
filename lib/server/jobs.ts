@@ -2,29 +2,31 @@
 // process, backed by on-disk job state (so /status works and resume is possible).
 
 import { join } from "node:path";
-import { readFileSync, existsSync, readdirSync, statSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 
-import { runJob, readManifest, type JobState } from "@/lib/core/job";
+import { runJob, readManifest, setManifestStatus, type JobState } from "@/lib/core/job";
+import type { PrecisionMode } from "@/lib/core/quality/route";
 import { createProvider, type ServerConfig } from "./config";
+import { appendEvent } from "./events";
+import { settleCreditReservation } from "./credits";
 
-/** A job plus whether it is actively running in THIS process right now. */
-export type JobSummary = JobState & { running: boolean };
+type ControlSignal = "pause" | "cancel";
 
 const states = new Map<string, JobState>();
 const running = new Set<string>();
-// Per-job abort controllers, so a running job can be terminated (stop = resumable,
-// discard = stop + delete). Only populated while a job runs in this process.
-const controllers = new Map<string, AbortController>();
+const controls = new Map<string, ControlSignal>();
 
-// Job ids are always crypto.randomUUID(). Validating against that shape before using an id
-// in a filesystem path keeps a hostile id (e.g. "../../etc") from escaping the jobs dir —
-// critical for discard, which deletes a directory.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-export function isValidJobId(id: unknown): id is string {
-  return typeof id === "string" && UUID_RE.test(id);
+// Job ids are opaque UUIDs (crypto.randomUUID at upload). Anything else is rejected
+// before it can reach a filesystem path — a malicious id like "../../etc" must never
+// escape jobsDir/libraryDir, especially for the destructive rmSync in deleteJob.
+const JOB_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function isValidJobId(id: string): boolean {
+  return JOB_ID_RE.test(id);
 }
 
 export function jobDirFor(config: ServerConfig, id: string): string {
+  if (!isValidJobId(id)) throw new Error(`Invalid job id: ${id}`);
   return join(config.jobsDir, id);
 }
 
@@ -36,20 +38,59 @@ export function getState(config: ServerConfig, id: string): JobState | undefined
   return states.get(id) ?? readManifest(jobDirFor(config, id));
 }
 
+/**
+ * Ownership predicate: may `userId` act on this job? Fail-closed — a missing
+ * job (`undefined`) OR a job with no recorded owner is owned by nobody, so it
+ * is never accessible. Every job created through `/api/upload` stores an owner
+ * (`ctx.userId`, at least `"local"` in dev), so an ownerless manifest can only
+ * be a stray/legacy artifact and must not be world-readable in a public
+ * deployment. Callers map a `false` result to a 404 so existence isn't leaked.
+ */
+export function ownsJob(state: JobState | undefined, userId: string): boolean {
+  return Boolean(state?.userId) && state?.userId === userId;
+}
+
 export function isRunning(id: string): boolean {
   return running.has(id);
 }
 
+/** Every job on disk, freshest state first (in-memory wins over the last flush). */
+export function listJobs(config: ServerConfig): JobState[] {
+  if (!existsSync(config.jobsDir)) return [];
+  return readdirSync(config.jobsDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => states.get(e.name) ?? readManifest(jobDirFor(config, e.name)))
+    .filter((s): s is JobState => Boolean(s))
+    .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+}
+
+function isPrecisionMode(value: unknown): value is PrecisionMode {
+  return value === "balanced" || value === "fidelity" || value === "natural";
+}
+
 /** Start (or resume) a translation job in the background. Idempotent while running. */
-export function startJob(config: ServerConfig, id: string): void {
+export function startJob(
+  config: ServerConfig,
+  id: string,
+  opts: { sample?: boolean; precision?: PrecisionMode } = {},
+): void {
   if (running.has(id)) return;
 
+  controls.delete(id); // a fresh start/resume clears any stale signal
   const jobDir = jobDirFor(config, id);
   const epubBytes = new Uint8Array(readFileSync(join(jobDir, "source.epub")));
   const provider = createProvider(config);
 
-  const controller = new AbortController();
-  controllers.set(id, controller);
+  // Honor a sample request, and keep a previously-started sample a sample on resume (the
+  // resume route doesn't re-send the flag) so it never silently expands to the whole book.
+  const prior = readManifest(jobDir);
+  const sample = opts.sample || Boolean(prior?.sample);
+  const precision = isPrecisionMode(opts.precision)
+    ? opts.precision
+    : isPrecisionMode(prior?.precision)
+      ? prior.precision
+      : config.precision;
+
   running.add(id);
   void runJob({
     id,
@@ -58,55 +99,80 @@ export function startJob(config: ServerConfig, id: string): void {
     jobDir,
     ceilingUsd: config.costCeilingUsd,
     refine: config.refine,
+    selectiveRefine: config.refineSelective,
+    reasonerForHard: config.reasonerForHard,
+    precision,
+    concurrency: config.concurrency,
+    ...(config.model ? { model: config.model } : {}),
     libraryDir: config.libraryDir,
+    ...(sample ? { sample: true } : {}),
     onProgress: cacheState,
-    signal: controller.signal,
+    shouldStop: () => controls.get(id), // peek; cleared in finally
   })
+    .then((final) => {
+      // T18 failure bucket (E6): refusals are a T15 provider-selection datum
+      // and part of the kill-signal denominator.
+      if (final?.errorCode === "moderation_refusal") {
+        appendEvent(config, {
+          type: "moderation-refused",
+          ...(final.userId ? { userId: final.userId } : {}),
+          jobId: id,
+          detail: `refusedChunks=${final.refusedChunks ?? 0}`,
+        });
+      }
+      if (final?.status === "error" || final?.status === "cancelled") {
+        settleCreditReservation(config, id, "refunded");
+      }
+    })
     .catch((err) => {
-      // Pass id/message as args (not interpolated into the format string) so a log message
-      // can't be forged via an injected format specifier.
-      console.error("[job %s] failed: %s", id, err instanceof Error ? err.message : String(err));
+      settleCreditReservation(config, id, "refunded");
+      console.error(JSON.stringify({
+        event: "translation-job-failed",
+        jobId: id,
+        error: err instanceof Error
+          ? `${err.name}: ${err.message}`.slice(0, 400)
+          : "Unknown error",
+      }));
     })
     .finally(() => {
       running.delete(id);
-      controllers.delete(id);
+      controls.delete(id);
     });
 }
 
 /**
- * Stop a running job at the next chunk boundary, aborting any in-flight provider request.
- * Resumable: finished chunks stay on disk, so `startJob` later continues from there.
- * Returns true if a running job was signalled.
+ * Request a cooperative pause. Returns true if a running loop will pick it up; if the
+ * job is idle on disk, its manifest is flipped to paused directly.
  */
-export function stopJob(id: string): boolean {
-  const controller = controllers.get(id);
-  if (!controller) return false;
-  controller.abort();
-  return true;
-}
-
-/** Discard a job entirely: stop it if running, then delete its on-disk directory. */
-export function discardJob(config: ServerConfig, id: string): void {
-  stopJob(id);
-  states.delete(id);
-  rmSync(jobDirFor(config, id), { recursive: true, force: true });
-}
-
-/**
- * Active jobs for the admin panel: every on-disk job that is NOT finished ("done" jobs live
- * in the household library). Each is tagged with whether it is running in this process now.
- * Newest first (by manifest mtime).
- */
-export function listJobs(config: ServerConfig): JobSummary[] {
-  if (!existsSync(config.jobsDir)) return [];
-  const summaries: { summary: JobSummary; mtimeMs: number }[] = [];
-  for (const id of readdirSync(config.jobsDir)) {
-    const jobDir = jobDirFor(config, id);
-    const state = states.get(id) ?? readManifest(jobDir);
-    if (!state || state.status === "done") continue;
-    const manifest = join(jobDir, "manifest.json");
-    const mtimeMs = existsSync(manifest) ? statSync(manifest).mtimeMs : 0;
-    summaries.push({ summary: { ...state, running: running.has(id) }, mtimeMs });
+export function pauseJob(config: ServerConfig, id: string): JobState | undefined {
+  if (running.has(id)) {
+    controls.set(id, "pause");
+    return getState(config, id);
   }
-  return summaries.sort((a, b) => b.mtimeMs - a.mtimeMs).map((s) => s.summary);
+  const next = setManifestStatus(jobDirFor(config, id), "paused");
+  if (next) cacheState(next);
+  return next;
+}
+
+/** Request cancellation. A running loop ends at its next chunk; idle jobs flip on disk. */
+export function cancelJob(config: ServerConfig, id: string): JobState | undefined {
+  if (running.has(id)) {
+    controls.set(id, "cancel");
+    return getState(config, id);
+  }
+  const next = setManifestStatus(jobDirFor(config, id), "cancelled");
+  if (next) cacheState(next);
+  settleCreditReservation(config, id, "refunded");
+  return next;
+}
+
+/** Stop the job and remove it from disk and memory. Optionally drop its library copy. */
+export function deleteJob(config: ServerConfig, id: string, withLibrary = false): void {
+  if (!isValidJobId(id)) throw new Error(`Invalid job id: ${id}`);
+  if (running.has(id)) controls.set(id, "cancel");
+  settleCreditReservation(config, id, "refunded");
+  states.delete(id);
+  controls.delete(id);
+  rmSync(jobDirFor(config, id), { recursive: true, force: true });
+  if (withLibrary) rmSync(join(config.libraryDir, id), { recursive: true, force: true });
 }

@@ -1,13 +1,19 @@
 @import "tailwindcss";
 
-/* Warm, editorial "book room" aesthetic — intentional, not a default template.
-   Cream paper, deep ink, rust accent. Light direction by choice (not auto dark). */
+/* Class-based dark mode (toggle adds .dark on <html>). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Editorial "book room" aesthetic — warm paper + ember rust, intentional, not a
+   default template. Light is cream; dark is deep warm charcoal with an ember glow.
+   The dashboard keeps this palette but drops the ambient animation. */
 @theme {
   --color-background: oklch(98.5% 0.008 85);
   --color-foreground: oklch(24% 0.02 60);
 
   --color-card: oklch(100% 0 0);
   --color-card-foreground: oklch(24% 0.02 60);
+  /* Slightly raised surface for tiles / bars. */
+  --color-surface: oklch(99.5% 0.006 85);
 
   --color-primary: oklch(52% 0.16 28);
   --color-primary-foreground: oklch(98.5% 0.008 85);
@@ -22,12 +28,58 @@
   --color-ring: oklch(52% 0.16 28);
 
   --color-good: oklch(58% 0.13 150);
+  --color-warning: oklch(70% 0.13 70);
   --color-destructive: oklch(55% 0.2 28);
+  --color-destructive-foreground: oklch(98.5% 0.008 85);
 
-  --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Overlay + form tokens used by the dialog/dropdown/input primitives. */
+  --color-popover: var(--color-card);
+  --color-popover-foreground: var(--color-card-foreground);
+  --color-input: var(--color-border);
 
-  --radius: 0.85rem;
+  /* Sidebar: a hair off the page so the rail reads as a distinct surface. */
+  --color-sidebar: oklch(97% 0.01 82);
+  --color-sidebar-foreground: oklch(34% 0.02 60);
+  --color-sidebar-border: oklch(89% 0.014 70);
+  --color-sidebar-accent: oklch(94% 0.03 45);
+
+  --font-display: var(--font-fraunces), "Iowan Old Style", Georgia, serif;
+  --font-serif: var(--font-fraunces), "Iowan Old Style", Georgia, serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  --radius: 0.7rem;
+}
+
+/* ---- Dark: deep warm charcoal, brighter ember accent that glows on dark ---- */
+.dark {
+  --color-background: oklch(17.5% 0.012 55);
+  --color-foreground: oklch(92% 0.012 85);
+
+  --color-card: oklch(21% 0.014 52);
+  --color-card-foreground: oklch(92% 0.012 85);
+  --color-surface: oklch(23% 0.016 50);
+
+  --color-primary: oklch(67% 0.16 38);
+  --color-primary-foreground: oklch(16% 0.01 50);
+
+  --color-muted: oklch(26% 0.014 52);
+  --color-muted-foreground: oklch(68% 0.018 70);
+
+  --color-accent: oklch(32% 0.055 38);
+  --color-accent-foreground: oklch(86% 0.07 50);
+
+  --color-border: oklch(31% 0.012 55);
+  --color-ring: oklch(67% 0.16 38);
+
+  --color-good: oklch(70% 0.15 155);
+  --color-warning: oklch(78% 0.13 72);
+  --color-destructive: oklch(64% 0.18 28);
+  --color-destructive-foreground: oklch(96% 0.01 85);
+
+  --color-sidebar: oklch(19.5% 0.013 52);
+  --color-sidebar-foreground: oklch(80% 0.015 80);
+  --color-sidebar-border: oklch(29% 0.012 55);
+  --color-sidebar-accent: oklch(30% 0.05 38);
 }
 
 * {
@@ -36,18 +88,37 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  color-scheme: light;
+}
+html.dark {
+  color-scheme: dark;
 }
 
 body {
-  background:
-    radial-gradient(120% 80% at 50% -8%, var(--color-accent), transparent 60%),
-    var(--color-background);
+  background: var(--color-background);
   color: var(--color-foreground);
   font-family: var(--font-sans);
   min-height: 100vh;
 }
 
-/* Reader prose: serif, generous measure, the original shown muted beneath each block. */
+/* ---- Editorial helpers (kept) ---- */
+::selection {
+  background: color-mix(in oklch, var(--color-primary) 30%, transparent);
+}
+.display {
+  font-family: var(--font-display);
+}
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+/* Gradient hairline divider. */
+.rule {
+  height: 1px;
+  background: linear-gradient(90deg, var(--color-border), transparent);
+}
+
+/* Reader prose: serif, generous measure, original shown muted beneath each block. */
 .prose-reader {
   font-family: var(--font-serif);
   font-size: 1.2rem;

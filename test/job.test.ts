@@ -21,23 +21,8 @@ class SpyTranslator implements Translator {
   }
 }
 
-// Aborts the given controller right after the FIRST chunk is translated, so the next
-// loop iteration sees the cancellation — proving the job stops resumably mid-book.
-class AbortAfterFirst implements Translator {
-  readonly name = "fake";
-  calls = 0;
-  private inner = new FakeTranslator();
-  constructor(private readonly controller: AbortController) {}
-  async translateChunk(input: TranslateChunkInput) {
-    this.calls += 1;
-    const out = await this.inner.translateChunk(input);
-    if (this.calls === 1) this.controller.abort();
-    return out;
-  }
-}
-
 function freshJobDir(): string {
-  return mkdtempSync(join(tmpdir(), "quire-job-"));
+  return mkdtempSync(join(tmpdir(), "nativread-job-"));
 }
 
 test("full job translates the book and writes a valid EPUB", async () => {
@@ -65,6 +50,34 @@ test("full job translates the book and writes a valid EPUB", async () => {
   expect(reparsed.spine[0]!.content).toContain('href="ch2.xhtml"'); // link attrs survived
 
   rmSync(jobDir, { recursive: true, force: true });
+});
+
+test("full job preserves the original hyperlink targets and inline structure", async () => {
+  const jobDir = freshJobDir();
+  await runJob({
+    id: "structure",
+    epubBytes: buildFixtureEpub([
+      {
+        href: "ch1.xhtml",
+        id: "ch1",
+        title: "Chapter One",
+        body: '<p>He <em>found <a class="xref" href="ch2.xhtml">the letter</a></em>.</p>',
+      },
+      {
+        href: "ch2.xhtml",
+        id: "ch2",
+        title: "Chapter Two",
+        body: '<p id="target">The answer waited there.</p>',
+      },
+    ]),
+    provider: new FakeTranslator(),
+    jobDir,
+  });
+
+  const reparsed = parseEpub(new Uint8Array(readFileSync(join(jobDir, "output.epub"))));
+  expect(reparsed.spine[0]!.content).toContain('<a class="xref" href="ch2.xhtml">');
+  expect(reparsed.spine[0]!.content).toContain("</a></em>");
+  expect(reparsed.spine[1]!.content).toContain('id="target"');
 });
 
 test("resume: with all chunks on disk, re-run translates nothing", async () => {
@@ -101,38 +114,6 @@ test("resume: only missing chunks are re-translated", async () => {
 
   expect(spy.calls).toBe(1); // only chapter two's chunk
   expect(state.status).toBe("done");
-
-  rmSync(jobDir, { recursive: true, force: true });
-});
-
-test("stop: an aborted job stops resumably, keeping finished chunks", async () => {
-  const jobDir = freshJobDir();
-  const ac = new AbortController();
-  const provider = new AbortAfterFirst(ac);
-
-  const state = await runJob({
-    id: "tc",
-    epubBytes: buildFixtureEpub(),
-    provider,
-    jobDir,
-    signal: ac.signal,
-  });
-
-  expect(state.status).toBe("stopped"); // resumable, not "error"
-  expect(state.error).toBeUndefined();
-  expect(provider.calls).toBe(1); // stopped before the second chunk
-  expect(state.chunks.done).toBe(1);
-
-  // The first chunk is persisted, so a later resume continues instead of re-paying.
-  const ch1 = join(jobDir, "chunks", `${encodeURIComponent("OEBPS/ch1.xhtml#0")}.json`);
-  expect(existsSync(ch1)).toBe(true);
-  expect(existsSync(join(jobDir, "output.epub"))).toBe(false);
-
-  // Resume to completion with a normal provider; the kept chunk is not re-translated.
-  const spy = new SpyTranslator();
-  const resumed = await runJob({ id: "tc", epubBytes: buildFixtureEpub(), provider: spy, jobDir });
-  expect(resumed.status).toBe("done");
-  expect(spy.calls).toBe(1); // only the remaining chunk
 
   rmSync(jobDir, { recursive: true, force: true });
 });

@@ -1,0 +1,50 @@
+# Dedicated translator backend for the NativRead mobile app.
+#
+# It uses the same image/core as NativRead Web, but keeps separate volumes and a
+# separate host port so mobile testing does not mix with the household web library.
+services:
+  nativread-translator:
+    build: .
+    container_name: nativread-translator
+    restart: unless-stopped
+    ports:
+      - "${NATIVREAD_TRANSLATOR_PORT:-48218}:48217"
+    environment:
+      APP_PROFILE: "nativread"
+      TRANSLATION_PROVIDER: "${TRANSLATION_PROVIDER:-gemini}"
+      PROVIDER_API_KEY: "${PROVIDER_API_KEY:-}"
+      PROVIDER_MODEL: "${PROVIDER_MODEL:-gemini-2.5-flash}"
+      PROVIDER_BASE_URL: "${PROVIDER_BASE_URL:-}"
+      PROVIDER_REASONER_MODEL: "${PROVIDER_REASONER_MODEL:-}"
+      COST_CEILING_USD: "${COST_CEILING_USD:-10}"
+      TRANSLATION_REFINE: "${TRANSLATION_REFINE:-1}"
+      TRANSLATION_REFINE_SELECTIVE: "${TRANSLATION_REFINE_SELECTIVE:-1}"
+      TRANSLATION_REASONER_HARD: "${TRANSLATION_REASONER_HARD:-1}"
+      TRANSLATION_PRECISION: "${TRANSLATION_PRECISION:-balanced}"
+      TRANSLATION_CONCURRENCY: "${TRANSLATION_CONCURRENCY:-4}"
+      MAX_EPUB_UPLOAD_BYTES: "${MAX_EPUB_UPLOAD_BYTES:-33554432}"
+      MAX_EPUB_ENTRIES: "${MAX_EPUB_ENTRIES:-2000}"
+      MAX_EPUB_UNCOMPRESSED_BYTES: "${MAX_EPUB_UNCOMPRESSED_BYTES:-134217728}"
+      REQUIRE_TRANSLATION_ENTITLEMENTS: "${REQUIRE_TRANSLATION_ENTITLEMENTS:-0}"
+      STOREKIT_ALLOW_UNSIGNED_GRANTS: "${STOREKIT_ALLOW_UNSIGNED_GRANTS:-0}"
+      NATIVREAD_BACKEND_SHARED_SECRET: "${NATIVREAD_BACKEND_SHARED_SECRET:-}"
+      APPLE_CLIENT_IDS: "${APPLE_CLIENT_IDS:-}"
+      APPLE_TEAM_ID: "${APPLE_TEAM_ID:-}"
+      APPLE_KEY_ID: "${APPLE_KEY_ID:-}"
+      APPLE_PRIVATE_KEY: "${APPLE_PRIVATE_KEY:-}"
+      NATIVREAD_SESSION_SECRET: "${NATIVREAD_SESSION_SECRET:-}"
+      ARTIFACT_RETENTION_HOURS: "${ARTIFACT_RETENTION_HOURS:-24}"
+      HOSTNAME: "0.0.0.0"
+      PORT: "48217"
+      JOBS_DIR: "/data/jobs"
+      LIBRARY_DIR: "/data/library"
+      ENTITLEMENTS_DIR: "/data/entitlements"
+    volumes:
+      - nativread-translator-jobs:/data/jobs
+      - nativread-translator-library:/data/library
+      - nativread-translator-entitlements:/data/entitlements
+
+volumes:
+  nativread-translator-jobs:
+  nativread-translator-library:
+  nativread-translator-entitlements:

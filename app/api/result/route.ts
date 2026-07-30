@@ -3,9 +3,12 @@ import { join } from "node:path";
 import { parse } from "node-html-parser";
 
 import { parseEpub } from "@/lib/core/epub";
-import { libraryEpubPath } from "@/lib/core/library";
+import { libraryEpubPath, getLibraryEntry } from "@/lib/core/library";
+import { readManifest } from "@/lib/core/job";
 import { loadConfig } from "@/lib/server/config";
-import { isValidJobId, jobDirFor } from "@/lib/server/jobs";
+import { deleteJob, jobDirFor, isValidJobId } from "@/lib/server/jobs";
+import { requestContext } from "@/lib/server/request-context";
+import { settleCreditReservation } from "@/lib/server/credits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,13 +25,26 @@ function titleOf(xhtml: string, index: number): string {
 
 export async function GET(req: Request): Promise<Response> {
   const config = loadConfig();
+  const ctx = await requestContext(req, config);
+  if (ctx instanceof Response) return ctx;
+
   const url = new URL(req.url);
   const id = url.searchParams.get("id");
-  if (!isValidJobId(id)) return Response.json({ error: "Érvénytelen job azonosító." }, { status: 400 });
+  if (!id || !isValidJobId(id)) return Response.json({ error: "Hiányzik vagy érvénytelen a job azonosító." }, { status: 400 });
 
   const jobDir = jobDirFor(config, id);
   const jobOut = join(jobDir, "output.epub");
   const libOut = libraryEpubPath(config.libraryDir, id);
+  const manifest = readManifest(jobDir);
+  const libraryEntry = getLibraryEntry(config.libraryDir, id);
+  // Fail-closed: the result is served only if the caller owns the job or its
+  // library entry. Unknown id and someone-else's id both 404 identically, so a
+  // probe can't distinguish "not yours" from "doesn't exist".
+  const owner = manifest?.userId ?? libraryEntry?.userId;
+  if (owner !== ctx.userId) {
+    return Response.json({ error: "Ismeretlen fordítás." }, { status: 404 });
+  }
+
   const translatedPath = existsSync(jobOut) ? jobOut : existsSync(libOut) ? libOut : null;
   if (!translatedPath) {
     return Response.json({ error: "A fordítás még nem készült el." }, { status: 409 });
@@ -37,12 +53,29 @@ export async function GET(req: Request): Promise<Response> {
   const translatedBytes = readFileSync(translatedPath);
 
   if (url.searchParams.get("download") === "1") {
-    return new Response(new Uint8Array(translatedBytes), {
+    const response = new Response(new Uint8Array(translatedBytes), {
       headers: {
         "content-type": "application/epub+zip",
         "content-disposition": `attachment; filename="forditas-${id}.epub"`,
+        "cache-control": "private, no-store, max-age=0",
+        "x-content-type-options": "nosniff",
       },
     });
+
+    if (url.searchParams.get("consume") === "1") {
+      // The response owns an in-memory copy now, so the source EPUB, chunk
+      // cache and translated server copy can be removed before the bytes leave
+      // the process. A library entry is deleted only when its metadata proves
+      // that it belongs to this same caller (fail closed on corrupt/conflicting
+      // metadata). The privacy tradeoff is deliberate: after a failed transfer
+      // the user may need to re-upload, but book files are not retained merely
+      // for convenience.
+      const mayDeleteLibrary = libraryEntry?.userId === ctx.userId;
+      settleCreditReservation(config, id, "finalized");
+      deleteJob(config, id, mayDeleteLibrary);
+    }
+
+    return response;
   }
 
   const translated = parseEpub(new Uint8Array(translatedBytes));
@@ -62,5 +95,10 @@ export async function GET(req: Request): Promise<Response> {
     };
   });
 
-  return Response.json({ title: translated.title, items });
+  // Surface sample mode so the reader can warn that only the opening was translated
+  // (otherwise the mostly-original rest of the book looks like a failed translation).
+  // Prefer the job manifest, but fall back to the library entry (the job dir may be gone).
+  const sample = Boolean(manifest?.sample ?? libraryEntry?.sample);
+
+  return Response.json({ title: translated.title, items, sample });
 }
