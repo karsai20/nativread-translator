@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { mkdir, open, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
-import { parseEpub } from "../lib/core/epub";
+import { EpubArchiveLimitError, parseEpub } from "../lib/core/epub";
 import { runJob, type JobState } from "../lib/core/job";
 import { quoteForEpub } from "../lib/core/metering";
 import { createProvider, loadConfig } from "../lib/server/config";
@@ -104,11 +104,22 @@ function encodeMetadata(value: unknown): string {
 async function inspect(request: Request): Promise<Response> {
   const jobId = request.headers.get("x-nativread-job-id") ?? "";
   if (!validJobId(jobId)) throw new RunnerError(400, "Invalid job id");
-  const dir = join("/tmp", "nativread", jobId, `inspect-${crypto.randomUUID()}`);
+  // Flat, not nested under the job: one shared container now serves every
+  // inspection, so a per-job parent would pile up empty directories for as
+  // long as the instance lives.
+  const dir = join("/tmp", "nativread", `inspect-${crypto.randomUUID()}`);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   try {
     const received = await receiveBody(request, join(dir, "source.epub"));
-    const epub = parseEpub(received.bytes, archiveLimits());
+    // A rejected book is the caller's problem, not a runner crash: keep the
+    // parser's reason and a 4xx so the worker can show it instead of "500".
+    let epub;
+    try {
+      epub = parseEpub(received.bytes, archiveLimits());
+    } catch (error) {
+      const status = error instanceof EpubArchiveLimitError ? 413 : 400;
+      throw new RunnerError(status, (error as Error).message);
+    }
     return json({
       sourceHash: received.sha256,
       title: epub.title,
@@ -168,6 +179,15 @@ async function translate(request: Request): Promise<Response> {
     // truncate the stream. Cloudflare stops this per-job container shortly
     // after the request, and /tmp is ephemeral, so lifecycle cleanup owns it.
   }
+}
+
+// `authorized` fails closed on a short token, which looks identical to a wrong
+// one and never logs. Say it once at boot so the misconfiguration is visible.
+if ((process.env.CONTAINER_INTERNAL_TOKEN ?? "").length < 32) {
+  console.error(JSON.stringify({
+    event: "container-misconfigured",
+    error: "CONTAINER_INTERNAL_TOKEN is missing or under 32 chars; every request will 401",
+  }));
 }
 
 Bun.serve({

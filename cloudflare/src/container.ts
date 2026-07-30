@@ -6,6 +6,20 @@ import type { Env } from "./types";
  * One stable container instance is addressed by each job UUID. The container
  * receives no R2/D1 credentials and can only reach Gemini over the internet.
  */
+/**
+ * EU jurisdiction is a data-residency guarantee, so it is the default and the
+ * single opt-out is `LOCAL_DEV`, which exists only as a `wrangler dev --var`
+ * flag and never appears in wrangler.jsonc — production cannot reach this
+ * branch by forgetting a variable. workerd does not implement jurisdictions,
+ * so without the opt-out the container path cannot be exercised locally at all.
+ */
+export function translatorContainer(env: Env, name: string) {
+  const namespace = env.LOCAL_DEV === "1"
+    ? env.TRANSLATOR_CONTAINER
+    : env.TRANSLATOR_CONTAINER.jurisdiction("eu");
+  return namespace.getByName(name);
+}
+
 export class TranslatorContainer extends Container<Env> {
   defaultPort = 8080;
   sleepAfter = "2m";
@@ -30,4 +44,22 @@ export class TranslatorContainer extends Container<Env> {
     COST_CEILING_USD: this.env.COST_CEILING_USD,
     NODE_EXTRA_CA_CERTS: "/etc/cloudflare/certs/cloudflare-containers-ca.crt",
   };
+
+  // Without these the runtime swallows every lifecycle event: a container that
+  // dies on boot shows up only as a bare 500 at the far end of the call chain.
+  override onStart(): void {
+    console.log(JSON.stringify({ event: "container-start", id: this.ctx.id.toString() }));
+  }
+
+  override onStop({ exitCode, reason }: { exitCode: number; reason: string }): void {
+    console.log(JSON.stringify({ event: "container-stop", exitCode, reason }));
+  }
+
+  override onError(error: unknown): unknown {
+    console.error(JSON.stringify({
+      event: "container-failed",
+      error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    }));
+    return error;
+  }
 }
