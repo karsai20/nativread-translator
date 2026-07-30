@@ -9,6 +9,8 @@ on:
 # Supply-chain floor (blueprint §7): read-only token, SHA-pinned actions.
 permissions:
   contents: read
+  # gitleaks reads the PR's commit list; without this its scan dies on a 403.
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.ref }}
