@@ -37,6 +37,9 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun test
       - run: bunx tsc --noEmit --incremental false
+      # The Worker has its own tsconfig, so the root type-check never saw it —
+      # and it is the deployed backend.
+      - run: bun run cf:typecheck
       - run: bun run build
 
   audit:

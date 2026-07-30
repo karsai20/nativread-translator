@@ -6,8 +6,10 @@ next-env.d.ts
 # components/library stay tracked (and scannable by Tailwind).
 /jobs/
 /library/
-.env
-.env*.local
+# Every env file, because the documented self-host one is `.env.nativread` and
+# a `.env` / `.env*.local` pair does not cover it.
+.env*
+!.env*.example
 cloudflare/.dev.vars
 .wrangler/
 *.log
