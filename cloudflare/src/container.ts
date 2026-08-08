@@ -22,7 +22,12 @@ export function translatorContainer(env: Env, name: string) {
 
 export class TranslatorContainer extends Container<Env> {
   defaultPort = 8080;
-  sleepAfter = "2m";
+  // Inspection is sub-second, but a cold boot in front of it is not, and the
+  // shared inspect instance is what every quote goes through. At 2m a reader
+  // comparing two books paid a cold start for the second one.
+  // ponytail: 15m trades container time for quote latency; lower it if the
+  // container bill outgrows the wait it removes.
+  sleepAfter = "15m";
   enableInternet = true;
   interceptHttps = true;
   allowedHosts = ["generativelanguage.googleapis.com"];

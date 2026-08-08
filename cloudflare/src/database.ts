@@ -1,5 +1,7 @@
 import type { TermsAcceptanceInput } from "./legal";
 import type { Env, JobRow } from "./types";
+import type { LanguagePair } from "../../lib/core/languages";
+import type { TermsRelease } from "./legal";
 
 /**
  * Length-tiered per-book consumables. A book is priced once, at upload, from the
@@ -126,10 +128,10 @@ export class UserDataRepository {
   async recordAcceptance(
     job: JobRow,
     acceptance: TermsAcceptanceInput,
-    env: Pick<Env, "TERMS_VERSION" | "TERMS_DOCUMENT_URL">,
+    release: TermsRelease,
   ): Promise<void> {
     this.assertOwnedJob(job);
-    await recordTermsAcceptance(this.db, job, acceptance, env);
+    await recordTermsAcceptance(this.db, job, acceptance, release);
   }
 
   async reserveJobBudget(
@@ -200,17 +202,21 @@ export class UserDataRepository {
   async queueJob(
     jobId: string,
     sample: boolean,
+    pair: LanguagePair,
     termsVersion: string,
     aiConsentVersion: string,
     aiProvider: string,
     updatedAt: string,
   ): Promise<number> {
     const result = await this.db.prepare(
-      "UPDATE jobs SET status = 'queued', sample = ?, target_language = 'hu', terms_version = ?, " +
-      "ai_consent_version = ?, ai_provider = ?, error_code = NULL, error_message = NULL, updated_at = ? " +
+      "UPDATE jobs SET status = 'queued', sample = ?, source_language = ?, target_language = ?, " +
+      "terms_version = ?, ai_consent_version = ?, ai_provider = ?, error_code = NULL, " +
+      "error_message = NULL, updated_at = ? " +
       "WHERE id = ? AND user_id = ? AND status IN ('pending', 'error', 'cancelled')",
     ).bind(
       sample ? 1 : 0,
+      pair.source,
+      pair.target,
       termsVersion,
       aiConsentVersion,
       aiProvider,
@@ -287,7 +293,7 @@ async function recordTermsAcceptance(
   db: D1Database,
   job: JobRow,
   acceptance: TermsAcceptanceInput,
-  env: Pick<Env, "TERMS_VERSION" | "TERMS_DOCUMENT_URL">,
+  release: TermsRelease,
 ): Promise<void> {
   const serverAcceptedAt = new Date().toISOString();
   await db.prepare(
@@ -300,19 +306,19 @@ async function recordTermsAcceptance(
     job.user_id,
     job.id,
     job.source_hash,
-    env.TERMS_VERSION,
+    release.version,
     acceptance.statementVersion,
     acceptance.method,
     acceptance.acceptedAt,
     serverAcceptedAt,
     acceptance.locale,
-    env.TERMS_DOCUMENT_URL,
+    release.documentUrl,
   ).run();
 
   const stored = await db.prepare(
     "SELECT acceptance_id, statement_version, acceptance_method, terms_document_url " +
     "FROM terms_acceptances WHERE user_id = ? AND source_hash = ? AND terms_version = ?",
-  ).bind(job.user_id, job.source_hash, env.TERMS_VERSION).first<{
+  ).bind(job.user_id, job.source_hash, release.version).first<{
     acceptance_id: string;
     statement_version: string;
     acceptance_method: string;
@@ -322,7 +328,7 @@ async function recordTermsAcceptance(
     !stored
     || stored.statement_version !== acceptance.statementVersion
     || stored.acceptance_method !== acceptance.method
-    || stored.terms_document_url !== env.TERMS_DOCUMENT_URL
+    || stored.terms_document_url !== release.documentUrl
   ) {
     throw new Error("Terms acceptance does not match the immutable legal version");
   }

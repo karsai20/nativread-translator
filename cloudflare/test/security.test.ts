@@ -10,7 +10,7 @@ import {
   sha256,
   sourceKey,
 } from "../src/security";
-import { validateTermsAcceptance } from "../src/legal";
+import { termsReleaseFor, validateTermsAcceptance } from "../src/legal";
 
 const USER_ID = "a".repeat(64);
 const JOB_ID = "018f6f4d-90a7-7d8f-8f9a-1d4cf6b9a021";
@@ -80,9 +80,14 @@ describe("Cloudflare security boundary", () => {
 
   test("accepts only a current, explicit and versioned iOS clickwrap record", () => {
     const env = {
+      TERMS_VERSION: "2026-07-22",
       TERMS_EFFECTIVE_AT: "2026-07-22T00:00:00Z",
+      TERMS_DOCUMENT_URL: "https://nativread.com/terms/2026-07-22/",
       RIGHTS_ATTESTATION_VERSION: "2026-07-22",
     };
+    // The acceptance is judged against the release the client named; see
+    // legal-versions.test.ts for the multi-release rollout behaviour.
+    const release = termsReleaseFor("2026-07-22", env)!;
     const now = Date.parse("2026-07-22T12:00:00Z");
     expect(validateTermsAcceptance({
       id: JOB_ID,
@@ -90,20 +95,20 @@ describe("Cloudflare security boundary", () => {
       locale: "hu-HU",
       method: "ios-clickwrap",
       statementVersion: "2026-07-22",
-    }, env, now)).toEqual(expect.objectContaining({ method: "ios-clickwrap" }));
+    }, env, release, now)).toEqual(expect.objectContaining({ method: "ios-clickwrap" }));
     expect(() => validateTermsAcceptance({
       id: JOB_ID,
       acceptedAt: "2026-07-22T11:59:00Z",
       locale: "hu-HU",
       method: "implicit",
       statementVersion: "2026-07-22",
-    }, env, now)).toThrow();
+    }, env, release, now)).toThrow();
     expect(() => validateTermsAcceptance({
       id: JOB_ID,
       acceptedAt: "2026-07-21T23:59:59Z",
       locale: "hu-HU",
       method: "ios-clickwrap",
       statementVersion: "2026-07-22",
-    }, env, now)).toThrow();
+    }, env, release, now)).toThrow();
   });
 });

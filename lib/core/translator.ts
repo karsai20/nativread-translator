@@ -32,11 +32,19 @@ import { protectHtmlTextNodes, type ProtectedHtmlText } from "./html-segments";
 import { validateChunk, type QualityFlag, type ValidateOptions } from "./quality/validators";
 import { routeDraft, MAX_QUALITY_ITERATIONS, type PrecisionMode } from "./quality/route";
 import { guardChunk, type GuardReason } from "./quality/guard";
+import {
+  DEFAULT_PAIR,
+  languageName,
+  lengthBandFor,
+  type LanguagePair,
+} from "./languages";
 
 const BLOCK_MARKER_RE = new RegExp(`${BLOCK_MARKER_OPEN}\\d*${BLOCK_MARKER_CLOSE}?`, "g");
 
-export const SOURCE_LANG = "English";
-export const TARGET_LANG = "Hungarian";
+/** Names of the default pair. Prefer `opts.pair` — these exist so callers that
+ *  never cared about the language (tests, tooling) keep a stable default. */
+export const SOURCE_LANG = languageName(DEFAULT_PAIR.source);
+export const TARGET_LANG = languageName(DEFAULT_PAIR.target);
 
 export interface TokenUsage {
   inputTokens: number;
@@ -176,6 +184,9 @@ export interface BlockResult {
 
 export interface TranslateBlocksOptions {
   glossary: GlossaryMap;
+  /** Languages this chunk moves between. Drives the prompt, the guard and the
+   *  length band. Defaults to the pipeline's default pair. */
+  pair?: LanguagePair;
   previousContext?: string;
   /** Source text immediately before this chunk; resolves references across seams. */
   sourceContext?: string;
@@ -217,9 +228,12 @@ export class TranslationGuardError extends Error {
  * The floor is the side that matters: a missing paragraph is invisible to the reader who
  * has no source, while over-length only ever costs a wasted refine pass.
  */
-function lengthBand(mode: PrecisionMode | undefined): ValidateOptions {
-  if (mode === "fidelity") return { minLengthRatio: 0.92, maxLengthRatio: 1.25 };
-  return { minLengthRatio: 0.88, maxLengthRatio: 1.45 };
+function lengthBand(
+  mode: PrecisionMode | undefined,
+  pair: LanguagePair,
+): ValidateOptions {
+  const [min, max] = lengthBandFor(pair, mode === "fidelity" ? "fidelity" : "balanced");
+  return { minLengthRatio: min, maxLengthRatio: max };
 }
 
 export interface TranslateBlocksResult {
@@ -279,6 +293,7 @@ export async function translateBlocks(
   blocks: BlockInput[],
   opts: TranslateBlocksOptions,
 ): Promise<TranslateBlocksResult> {
+  const pair = opts.pair ?? DEFAULT_PAIR;
   const prepared: Prepared[] = blocks.map((b) => {
     const html = protectHtmlTextNodes(b.innerHtml);
     return { index: b.index, originalHtml: b.innerHtml, text: html.text, html };
@@ -297,12 +312,12 @@ export async function translateBlocks(
 
   // First pass: full pipeline (draft + optional refine).
   const first = await produceBlocks(provider, prepared, translatable, opts, { deterministic: false, refine: opts.refine });
-  if (guardChunk(guardBlocks(prepared, first.blocks)).ok) return first;
+  if (guardChunk(guardBlocks(prepared, first.blocks), pair).ok) return first;
 
   // Guard rejected the draft. Retry once, deterministically and without the refine pass —
   // a temp-0 re-translation rarely repeats a refusal / degenerate / foreign result.
   const retry = await produceBlocks(provider, prepared, translatable, opts, { deterministic: true, refine: false });
-  const report = guardChunk(guardBlocks(prepared, retry.blocks));
+  const report = guardChunk(guardBlocks(prepared, retry.blocks), pair);
   if (report.ok) return { ...retry, usage: addUsage(first.usage, retry.usage) };
 
   // Still bad: fail the chunk so per-chunk isolation drops it (no garbage in the book).
@@ -363,14 +378,15 @@ async function produceBlocks(
   opts: TranslateBlocksOptions,
   ctl: ProduceControl,
 ): Promise<TranslateBlocksResult> {
+  const pair = opts.pair ?? DEFAULT_PAIR;
   const payload = translatable.map((p) => `${blockMarker(p.index)}\n${p.text}`).join("\n\n");
 
   let usage = EMPTY_USAGE;
 
   const draft = await provider.translateChunk({
     text: payload,
-    sourceLang: SOURCE_LANG,
-    targetLang: TARGET_LANG,
+    sourceLang: languageName(pair.source),
+    targetLang: languageName(pair.target),
     glossary: opts.glossary,
     previousContext: opts.previousContext,
     sourceContext: opts.sourceContext,
@@ -385,7 +401,7 @@ async function produceBlocks(
       const refined = await provider.refineChunk({
         source: payload,
         draft: finalText,
-        targetLang: TARGET_LANG,
+        targetLang: languageName(pair.target),
         glossary: opts.glossary,
         previousContext: opts.previousContext,
         deep: false,
@@ -395,7 +411,7 @@ async function produceBlocks(
     } else {
       // Adaptive pipeline: local validators + judge -> routed, bounded refinement.
       const mode: PrecisionMode = opts.precision ?? "balanced";
-      const band = lengthBand(mode);
+      const band = lengthBand(mode, pair);
 
       for (let iteration = 0; iteration < MAX_QUALITY_ITERATIONS; iteration++) {
         const local = validateChunk(
@@ -419,7 +435,7 @@ async function produceBlocks(
             verdict = await provider.estimateChunk({
               source: payload,
               draft: finalText,
-              targetLang: TARGET_LANG,
+              targetLang: languageName(pair.target),
               glossary: opts.glossary,
             });
             usage = addUsage(usage, verdict.usage);
@@ -445,7 +461,7 @@ async function produceBlocks(
         const refined = await provider.refineChunk({
           source: scope?.source ?? payload,
           draft: scope?.draft ?? finalText,
-          targetLang: TARGET_LANG,
+          targetLang: languageName(pair.target),
           glossary: opts.glossary,
           previousContext: opts.previousContext,
           deep: decision.deep && Boolean(opts.reasonerForHard),
@@ -490,6 +506,7 @@ async function translateBlocksIndividually(
   opts: TranslateBlocksOptions,
   deterministic: boolean,
 ): Promise<TranslateBlocksResult> {
+  const pair = opts.pair ?? DEFAULT_PAIR;
   let usage = EMPTY_USAGE;
   const out: BlockResult[] = [];
 
@@ -500,8 +517,8 @@ async function translateBlocksIndividually(
     }
     const res = await provider.translateChunk({
       text: p.text,
-      sourceLang: SOURCE_LANG,
-      targetLang: TARGET_LANG,
+      sourceLang: languageName(pair.source),
+      targetLang: languageName(pair.target),
       glossary: opts.glossary,
       previousContext: opts.previousContext,
       sourceContext: opts.sourceContext,
@@ -530,14 +547,15 @@ async function translateTextSegmentsIndividually(
   opts: TranslateBlocksOptions,
   deterministic: boolean,
 ): Promise<{ html: string; usage: TokenUsage }> {
+  const pair = opts.pair ?? DEFAULT_PAIR;
   let usage = EMPTY_USAGE;
   const translations = new Map<number, string>();
 
   for (const segment of prepared.html.segments) {
     const res = await provider.translateChunk({
       text: segment.text,
-      sourceLang: SOURCE_LANG,
-      targetLang: TARGET_LANG,
+      sourceLang: languageName(pair.source),
+      targetLang: languageName(pair.target),
       glossary: opts.glossary,
       previousContext: opts.previousContext,
       sourceContext: opts.sourceContext,

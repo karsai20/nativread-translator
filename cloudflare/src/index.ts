@@ -8,7 +8,11 @@ import {
   internalJobById,
   internalReleaseAIBudget,
 } from "./database";
-import { validateTermsAcceptance } from "./legal";
+import {
+  honouredVersions,
+  termsReleaseFor,
+  validateTermsAcceptance,
+} from "./legal";
 import {
   HttpError,
   appAccountTokenFor,
@@ -34,6 +38,14 @@ import {
 import { appStoreTransaction, transactionRejection } from "./storekit";
 import type { Env, JobRow, TranslationMessage } from "./types";
 import { TranslationWorkflow } from "./workflow";
+import {
+  DEFAULT_PAIR,
+  isLanguageCode,
+  isValidatedPair,
+  languageName,
+  validatedPairs,
+  type LanguagePair,
+} from "../../lib/core/languages";
 
 export { TranslationWorkflow, TranslatorContainer };
 // Required by the containers runtime whenever a container intercepts outbound
@@ -396,6 +408,7 @@ async function startTranslation(request: Request, env: Env): Promise<Response> {
   const body = await parseSmallJson<{
     id?: unknown;
     sample?: unknown;
+    sourceLanguage?: unknown;
     targetLanguage?: unknown;
     rightsAttested?: unknown;
     termsAccepted?: unknown;
@@ -408,20 +421,36 @@ async function startTranslation(request: Request, env: Env): Promise<Response> {
   if (typeof body.id !== "string" || !UUID_PATTERN.test(body.id)) {
     throw new HttpError(400, "Érvénytelen fordításazonosító.");
   }
-  if (body.targetLanguage !== undefined && body.targetLanguage !== "hu") {
-    throw new HttpError(400, "Ez a verzió jelenleg magyarra fordít.");
+  // The pair is validated here, once, against the registry. `validated` is the
+  // release gate: a pair that is wired but unread stays a 400 rather than a
+  // best-effort translation at unknown quality.
+  const pair: LanguagePair = {
+    source: body.sourceLanguage === undefined ? DEFAULT_PAIR.source : body.sourceLanguage as never,
+    target: body.targetLanguage === undefined ? DEFAULT_PAIR.target : body.targetLanguage as never,
+  };
+  if (!isLanguageCode(pair.source) || !isLanguageCode(pair.target)) {
+    throw new HttpError(400, "Ismeretlen nyelv.");
   }
-  if (
-    body.rightsAttested !== true
-    || body.termsAccepted !== true
-    || body.termsVersion !== env.TERMS_VERSION
-  ) {
+  if (!isValidatedPair(pair)) {
+    const open = validatedPairs()
+      .map((p) => `${languageName(p.source)} → ${languageName(p.target)}`)
+      .join(", ");
+    throw new HttpError(400, `Ez a nyelvpár még nincs jóváhagyva. Elérhető: ${open}.`);
+  }
+  // Any still-honoured terms release is accepted, not only the current one:
+  // an app build in a user's hands cannot be updated in step with a deploy.
+  // The release the client names is what gets recorded, so the evidence stays
+  // exact even while two versions are live.
+  const termsRelease = termsReleaseFor(body.termsVersion, env);
+  if (body.rightsAttested !== true || body.termsAccepted !== true || !termsRelease) {
     throw new HttpError(403, "A fordítás előtt fogadd el az aktuális felhasználási feltételeket.");
   }
-  const termsAcceptance = validateTermsAcceptance(body.termsAcceptance, env);
+  const termsAcceptance = validateTermsAcceptance(body.termsAcceptance, env, termsRelease);
   if (
     body.aiProcessingConsent !== true
-    || body.aiConsentVersion !== env.AI_CONSENT_VERSION
+    || typeof body.aiConsentVersion !== "string"
+    || !honouredVersions(env.AI_CONSENT_VERSION, env.AI_CONSENT_SUPERSEDED)
+      .includes(body.aiConsentVersion)
     || body.aiProvider !== env.AI_PROVIDER_DISCLOSURE
   ) {
     throw new HttpError(403, "Az AI-feldolgozáshoz új, szolgáltatóspecifikus engedély szükséges.");
@@ -436,7 +465,7 @@ async function startTranslation(request: Request, env: Env): Promise<Response> {
     throw new HttpError(410, "A feltöltés lejárt. Töltsd fel újra a könyvet.");
   }
 
-  await userData.recordAcceptance(job, termsAcceptance, env);
+  await userData.recordAcceptance(job, termsAcceptance, termsRelease);
 
   const isSample = body.sample === true;
   const jobBudgetCents = moneyEnvCents(env.COST_CEILING_USD, 3, 0.01, 100);
@@ -485,7 +514,8 @@ async function startTranslation(request: Request, env: Env): Promise<Response> {
   const changed = await userData.queueJob(
     job.id,
     isSample,
-    env.TERMS_VERSION,
+    pair,
+    termsRelease.version,
     env.AI_CONSENT_VERSION,
     env.AI_PROVIDER_DISCLOSURE,
     now,

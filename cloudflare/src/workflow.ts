@@ -65,6 +65,8 @@ export class TranslationWorkflow extends WorkflowEntrypoint<Env, TranslationWork
         sourceHash: job.source_hash,
         resultKey: resultKey(job.user_id, job.id),
         sample: job.sample === 1,
+        sourceLanguage: job.source_language,
+        targetLanguage: job.target_language,
       };
     });
     if (!prepared) return;
@@ -96,6 +98,8 @@ export class TranslationWorkflow extends WorkflowEntrypoint<Env, TranslationWork
               "x-nativread-job-id": jobId,
               "x-nativread-source-hash": prepared.sourceHash,
               "x-nativread-sample": prepared.sample ? "1" : "0",
+              "x-nativread-source-lang": prepared.sourceLanguage,
+              "x-nativread-target-lang": prepared.targetLanguage,
             },
             body: source.body,
           });

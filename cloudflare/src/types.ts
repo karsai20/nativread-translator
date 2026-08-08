@@ -17,6 +17,7 @@ export interface JobRow {
   result_key: string | null;
   workflow_instance_id: string | null;
   provider: string;
+  source_language: string;
   target_language: string;
   sample: number;
   source_hash: string;
@@ -71,8 +72,19 @@ export interface Env {
   TERMS_VERSION: string;
   TERMS_EFFECTIVE_AT: string;
   TERMS_DOCUMENT_URL: string;
+  /**
+   * Earlier terms releases still honoured, so a terms change does not have to
+   * ship in the same breath as an app build. Clients on an older release keep
+   * working and their acceptance is recorded against the version they actually
+   * saw — never against whatever the server happens to serve now.
+   */
+  TERMS_SUPERSEDED?: unknown;
   RIGHTS_ATTESTATION_VERSION: string;
+  /** Earlier rights-statement versions still honoured. Same rollout reason. */
+  RIGHTS_ATTESTATION_SUPERSEDED?: unknown;
   AI_CONSENT_VERSION: string;
+  /** Earlier AI-processing consent versions still honoured. */
+  AI_CONSENT_SUPERSEDED?: unknown;
   AI_PROVIDER_DISCLOSURE: string;
   MAX_EPUB_UPLOAD_BYTES: string;
   MAX_EPUB_UNCOMPRESSED_BYTES: string;

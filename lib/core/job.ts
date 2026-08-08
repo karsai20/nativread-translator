@@ -16,6 +16,7 @@ import { parseEpub, writeEpub, type Epub } from "./epub";
 import { injectAiMarker } from "./ai-marker";
 import { chunkSpineItem, type Chunk } from "./chunker";
 import { translateBlocks, TranslationGuardError, type Translator } from "./translator";
+import { DEFAULT_PAIR, languageName, type LanguagePair } from "./languages";
 import { merge as mergeGlossary, seedFromTexts, type GlossaryMap } from "./glossary";
 import { stripInlineTags } from "./markup";
 import {
@@ -142,6 +143,9 @@ export function takeFirstContentChapter(
 
 export interface RunJobOptions {
   id: string;
+  /** Languages this book moves between. Defaults to the pipeline's default
+   *  pair; the API validates it before a job ever reaches here. */
+  pair?: LanguagePair;
   epubBytes: Uint8Array;
   provider: Translator;
   jobDir: string;
@@ -251,6 +255,7 @@ function reserialize(originalXhtml: string, serialized: string): string {
 export async function runJob(opts: RunJobOptions): Promise<JobState> {
   const { id, epubBytes, provider, jobDir, onProgress } = opts;
   const ceilingUsd = opts.ceilingUsd ?? DEFAULT_CEILING_USD;
+  const pair = opts.pair ?? DEFAULT_PAIR;
 
   mkdirSync(join(jobDir, "chunks"), { recursive: true });
 
@@ -310,7 +315,7 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
   };
   state = persist(jobDir, state, onProgress);
 
-  // Decide every recurring name's Hungarian rendering ONCE, before the chunks fan out.
+  // Decide every recurring name's target-language rendering ONCE, before the chunks fan out.
   // Hundreds of parallel chunks cannot agree on "Holloway úr" by themselves.
   if (prior?.glossary) {
     glossary = mergeGlossary(glossary, prior.glossary);
@@ -318,7 +323,7 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     try {
       const filled = await provider.fillGlossary({
         terms: Object.keys(glossary),
-        targetLang: "Hungarian",
+        targetLang: languageName(pair.target),
       });
       // The pass owns the final list: a term it leaves out is one it judged not to be a
       // name, and pinning those to a fixed rendering does more harm than leaving them free.
@@ -391,6 +396,7 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
     try {
       const sourceContext = sourceContextFor(index);
       const out = await translateBlocks(provider, chunk.blocks, {
+        pair,
         glossary,
         previousContext: anchor || undefined,
         ...(sourceContext ? { sourceContext } : {}),
@@ -536,7 +542,8 @@ export async function runJob(opts: RunJobOptions): Promise<JobState> {
 
     // EU AI Act Art 50(2): every delivered EPUB (full or sample) carries the
     // machine-readable AI marker + colophon. Throws rather than deliver unmarked.
-    injectAiMarker(epub, { sourceLang: "en", targetLang: "hu" });
+    // The EU AI Act Art 50 marker must name the real pair, not a constant.
+    injectAiMarker(epub, { sourceLang: pair.source, targetLang: pair.target });
     const outBytes = writeEpub(epub, translatedByHref);
     writeFileSync(join(jobDir, "output.epub"), outBytes);
 

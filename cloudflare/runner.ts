@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { EpubArchiveLimitError, parseEpub } from "../lib/core/epub";
 import { runJob, type JobState } from "../lib/core/job";
+import { DEFAULT_PAIR, isLanguageCode, type LanguagePair } from "../lib/core/languages";
 import { quoteForEpub } from "../lib/core/metering";
 import { createProvider, loadConfig } from "../lib/server/config";
 
@@ -131,6 +132,18 @@ async function inspect(request: Request): Promise<Response> {
   }
 }
 
+/**
+ * The pair the worker recorded for this job. Unknown codes fall back to the
+ * default rather than failing the run: the API already validated the pair, so
+ * a mismatch here means a header was lost, not that the user asked for it.
+ */
+function pairFromHeaders(request: Request): LanguagePair {
+  const source = request.headers.get("x-nativread-source-lang");
+  const target = request.headers.get("x-nativread-target-lang");
+  if (!isLanguageCode(source) || !isLanguageCode(target)) return DEFAULT_PAIR;
+  return { source, target };
+}
+
 async function translate(request: Request): Promise<Response> {
   const jobId = request.headers.get("x-nativread-job-id") ?? "";
   if (!validJobId(jobId)) throw new RunnerError(400, "Invalid job id");
@@ -149,6 +162,7 @@ async function translate(request: Request): Promise<Response> {
     if (config.providerName !== "gemini") throw new RunnerError(503, "Unsupported production provider");
     const state = await runJob({
       id: jobId,
+      pair: pairFromHeaders(request),
       epubBytes: received.bytes,
       provider: createProvider(config),
       jobDir,

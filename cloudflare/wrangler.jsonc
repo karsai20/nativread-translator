@@ -17,11 +17,26 @@
     // consistent output. See PLAN.md.
     "PROVIDER_MODEL": "gemini-3.1-flash-lite",
     "PROVIDER_BASE_URL": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-    "TERMS_VERSION": "2026-07-22",
-    "TERMS_EFFECTIVE_AT": "2026-07-22T00:00:00Z",
-    "TERMS_DOCUMENT_URL": "https://nativread.com/terms/2026-07-22/",
+    "TERMS_VERSION": "2026-08-05",
+    "TERMS_EFFECTIVE_AT": "2026-08-05T00:00:00Z",
+    "TERMS_DOCUMENT_URL": "https://nativread.com/terms/2026-08-05/",
+    // Releases still honoured alongside the current one. An app build already
+    // in someone's hands cannot be updated in step with a deploy, so dropping
+    // a version from this list is what ends its grace period — deliberately,
+    // not as a side effect of publishing new terms. Each entry keeps its own
+    // effective date and document URL, so the acceptance recorded against it
+    // stays exact evidence.
+    "TERMS_SUPERSEDED": [
+      {
+        "version": "2026-07-22",
+        "effectiveAt": "2026-07-22T00:00:00Z",
+        "documentUrl": "https://nativread.com/terms/2026-07-22/"
+      }
+    ],
     "RIGHTS_ATTESTATION_VERSION": "2026-07-22",
+    "RIGHTS_ATTESTATION_SUPERSEDED": [],
     "AI_CONSENT_VERSION": "2026-07-20-gemini",
+    "AI_CONSENT_SUPERSEDED": [],
     "AI_PROVIDER_DISCLOSURE": "Google Gemini API",
     "MAX_EPUB_UPLOAD_BYTES": "33554432",
     "MAX_EPUB_UNCOMPRESSED_BYTES": "134217728",

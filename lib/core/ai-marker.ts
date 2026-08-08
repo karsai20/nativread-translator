@@ -22,6 +22,7 @@
 
 import { strToU8, strFromU8 } from "fflate";
 import type { Epub } from "./epub";
+import { languageName } from "./languages";
 
 export const IPTC_PREFIX_DECL = "iptc: http://iptc.org/std/Iptc4xmpExt/2008-02-29/";
 export const DIGITAL_SOURCE_TYPE_URI =
@@ -36,17 +37,6 @@ export interface AiMarkerOptions {
   targetLang: string;
   /** ISO date of delivery; defaults to today (UTC). */
   date?: string;
-}
-
-const LANGUAGE_NAMES: Record<string, string> = {
-  en: "English",
-  hu: "Hungarian",
-  de: "German",
-  es: "Spanish",
-};
-
-function languageName(tag: string): string {
-  return LANGUAGE_NAMES[tag] ?? tag;
 }
 
 export function markerSentence(opts: AiMarkerOptions): string {
