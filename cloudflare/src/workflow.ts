@@ -114,63 +114,78 @@ export class TranslationWorkflow extends WorkflowEntrypoint<Env, TranslationWork
           // whole in the isolate. The runner also reads `content-length` to
           // enforce its own archive limit, so the header has to agree with it.
           const sized = new FixedLengthStream(source.size);
-          source.body.pipeTo(sized.writable).catch((error: unknown) => {
-            console.error(JSON.stringify({
-              event: "source-stream-failed", jobId, error: safeError(error),
-            }));
-          });
+          // The pipe outlives none of the branches below: a FixedLengthStream
+          // that nobody drains leaves a promise the runtime can never settle,
+          // and workerd then kills the whole workflow invocation with "your
+          // Worker's code had hung and would never generate a response" —
+          // after the book was already translated and published. Aborting in
+          // `finally` settles it on every path; on the happy path the pipe is
+          // long finished and the abort is a no-op.
+          const pump = new AbortController();
+          const pumped = source.body.pipeTo(sized.writable, { signal: pump.signal })
+            .catch((error: unknown) => {
+              if (pump.signal.aborted) return;
+              console.error(JSON.stringify({
+                event: "source-stream-failed", jobId, error: safeError(error),
+              }));
+            });
 
-          const container = translatorContainer(this.env, jobId);
-          const response = await container.fetch("http://container/run", {
-            method: "POST",
-            headers: {
-              "content-type": "application/epub+zip",
-              "content-length": String(source.size),
-              "x-nativread-internal-token": this.env.CONTAINER_INTERNAL_TOKEN,
-              "x-nativread-job-id": jobId,
-              "x-nativread-source-hash": prepared.sourceHash,
-              "x-nativread-sample": prepared.sample ? "1" : "0",
-              "x-nativread-source-lang": prepared.sourceLanguage,
-              "x-nativread-target-lang": prepared.targetLanguage,
-            },
-            body: sized.readable,
-          });
+          try {
+            const container = translatorContainer(this.env, jobId);
+            const response = await container.fetch("http://container/run", {
+              method: "POST",
+              headers: {
+                "content-type": "application/epub+zip",
+                "content-length": String(source.size),
+                "x-nativread-internal-token": this.env.CONTAINER_INTERNAL_TOKEN,
+                "x-nativread-job-id": jobId,
+                "x-nativread-source-hash": prepared.sourceHash,
+                "x-nativread-sample": prepared.sample ? "1" : "0",
+                "x-nativread-source-lang": prepared.sourceLanguage,
+                "x-nativread-target-lang": prepared.targetLanguage,
+              },
+              body: sized.readable,
+            });
 
-          if (!response.ok || !response.body) {
-            await response.body?.cancel().catch(() => undefined);
-            return {
-              ok: false,
-              errorCode: response.status === 422 ? "translation_refused" : "runner_failed",
-            } as const;
-          }
-          const metadata = decodeMetadata(response.headers.get("x-nativread-result"));
-          if (!metadata || metadata.status !== "done") {
-            await response.body.cancel("invalid result metadata");
-            return { ok: false, errorCode: "invalid_runner_result" } as const;
-          }
+            if (!response.ok || !response.body) {
+              await response.body?.cancel().catch(() => undefined);
+              return {
+                ok: false,
+                errorCode: response.status === 422 ? "translation_refused" : "runner_failed",
+              } as const;
+            }
+            const metadata = decodeMetadata(response.headers.get("x-nativread-result"));
+            if (!metadata || metadata.status !== "done") {
+              await response.body.cancel("invalid result metadata");
+              return { ok: false, errorCode: "invalid_runner_result" } as const;
+            }
 
-          // Account deletion can race a long translation. Check before and
-          // after the put; if the job disappeared, discard any orphan object.
-          const current = await internalJobById(this.env.DB, jobId);
-          if (!current || current.status !== "running") {
-            await response.body.cancel("job no longer active");
-            return { ok: false, errorCode: "job_cancelled" } as const;
+            // Account deletion can race a long translation. Check before and
+            // after the put; if the job disappeared, discard any orphan object.
+            const current = await internalJobById(this.env.DB, jobId);
+            if (!current || current.status !== "running") {
+              await response.body.cancel("job no longer active");
+              return { ok: false, errorCode: "job_cancelled" } as const;
+            }
+            // R2 refuses a stream whose length it cannot know, and the runner's
+            // `content-length` does not survive the container proxy — the same
+            // TypeError that killed the request leg then killed the result leg,
+            // after the whole book had already been paid for and translated.
+            // Buffering gives R2 an exact length and consumes the body, so a
+            // failed put cannot leave a dangling stream to hang the step.
+            // ponytail: holds the translated EPUB in memory; the isolate's 128 MB
+            // is comfortable against a 32 MB upload ceiling. Switch to a
+            // FixedLengthStream if the runner ever reports the output size.
+            const translated = await response.arrayBuffer();
+            await this.env.ARTIFACTS.put(prepared.resultKey, translated, {
+              httpMetadata: { contentType: "application/epub+zip" },
+              customMetadata: { jobId, sourceHash: prepared.sourceHash },
+            });
+            return { ok: true, metadata, resultKey: prepared.resultKey } as const;
+          } finally {
+            pump.abort();
+            await pumped;
           }
-          // R2 refuses a stream whose length it cannot know, and the runner's
-          // `content-length` does not survive the container proxy — the same
-          // TypeError that killed the request leg then killed the result leg,
-          // after the whole book had already been paid for and translated.
-          // Buffering gives R2 an exact length and consumes the body, so a
-          // failed put cannot leave a dangling stream to hang the step.
-          // ponytail: holds the translated EPUB in memory; the isolate's 128 MB
-          // is comfortable against a 32 MB upload ceiling. Switch to a
-          // FixedLengthStream if the runner ever reports the output size.
-          const translated = await response.arrayBuffer();
-          await this.env.ARTIFACTS.put(prepared.resultKey, translated, {
-            httpMetadata: { contentType: "application/epub+zip" },
-            customMetadata: { jobId, sourceHash: prepared.sourceHash },
-          });
-          return { ok: true, metadata, resultKey: prepared.resultKey } as const;
         },
       );
     } catch (error) {
