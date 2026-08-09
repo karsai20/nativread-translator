@@ -1,6 +1,6 @@
 import { revokeAppleAuthorizationCode } from "../../lib/server/apple-oauth";
 
-import { TranslatorContainer, translatorContainer } from "./container";
+import { INSPECT_CONTAINER, TranslatorContainer, translatorContainer } from "./container";
 import type { BookPurchaseInput } from "./database";
 import {
   UserDataRepository,
@@ -55,8 +55,6 @@ export { TranslationWorkflow, TranslatorContainer };
 export { ContainerProxy } from "@cloudflare/containers";
 
 const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
-/** Shared container for upload inspection, so parsing never competes with translations. */
-const INSPECT_CONTAINER = "inspect";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 function integerEnv(value: string, fallback: number, min: number, max: number): number {
@@ -173,7 +171,16 @@ async function inspectUpload(
     throw new HttpError(503, "A szolgáltatás pillanatnyilag túlterhelt. Próbáld újra egy perc múlva.");
   }
   if (!response.ok) {
-    if (response.status === 413) throw new HttpError(413, "Az EPUB fájl túl nagy.");
+    if (response.status === 413) {
+      // Four unrelated limits arrive here — compressed size, entry count,
+      // uncompressed size, and ZIP64/multi-disk, which is a capability gap and
+      // not a size at all. Calling all four "the file is too large" sent a
+      // reader looking at an average-sized book for a problem that was not
+      // there, and threw away the one line that said what actually happened.
+      const reason = await rejectionReason(response);
+      console.error(JSON.stringify({ event: "epub-rejected", jobId, reason }));
+      throw new HttpError(413, `Ezt az EPUB-ot nem tudjuk feldolgozni.${reason}`);
+    }
     // Allowlist, not denylist: only 400 and 413 are verdicts on the book. Any
     // other status (auth, boot, crash) is our side and must not read as
     // "your file is broken" — that is what hid this outage for a whole morning.

@@ -58,6 +58,50 @@ test("content preview skips short front matter", () => {
   expect(takeFirstContentChapter([front, chapter, later])).toEqual([chapter]);
 });
 
+test("content preview skips a table of contents that clears the word floor", () => {
+  const chunk = (href: string, key: string, text: string): Chunk => ({
+    itemHref: href,
+    key,
+    blocks: [{ index: 0, innerHtml: text }],
+  });
+  // A web novel's contents page: a hundred linked chapter titles is far more
+  // than the 250-word floor, so word count alone crowned it "first chapter"
+  // and the free sample translated the table of contents.
+  const contents = chunk(
+    "contents.xhtml",
+    "contents#0",
+    Array.from(
+      { length: 100 },
+      (_, index) => `<a href="ch${index}.xhtml">Chapter ${index}: The Long Descent</a>`,
+    ).join(" "),
+  );
+  const chapter = chunk(
+    "chapter-1.xhtml",
+    "chapter-1#0",
+    Array.from({ length: 300 }, (_, index) => `word${index}`).join(" "),
+  );
+
+  expect(takeFirstContentChapter([contents, chapter])).toEqual([chapter]);
+});
+
+test("content preview keeps a chapter whose prose merely contains links", () => {
+  const chunk = (href: string, key: string, text: string): Chunk => ({
+    itemHref: href,
+    key,
+    blocks: [{ index: 0, innerHtml: text }],
+  });
+  // Footnote and reference links must not read as navigation, or the guard
+  // would skip real chapters in any annotated edition.
+  const annotated = chunk(
+    "chapter-1.xhtml",
+    "chapter-1#0",
+    `${Array.from({ length: 300 }, (_, index) => `word${index}`).join(" ")} ` +
+      `<a href="notes.xhtml#n1">1</a> <a href="notes.xhtml#n2">2</a>`,
+  );
+
+  expect(takeFirstContentChapter([annotated])).toEqual([annotated]);
+});
+
 test("sample disabled translates the whole book", async () => {
   const dir = mkdtempSync(join(tmpdir(), "nativread-full-"));
   const state = await runJob({ id: "s2", epubBytes: buildFixtureEpub(), provider: new FakeTranslator(), jobDir: dir });

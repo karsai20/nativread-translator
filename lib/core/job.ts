@@ -98,11 +98,45 @@ const DEFAULT_CONCURRENCY = 4;
 const SAMPLE_MIN_CONTENT_WORDS = 250;
 const SAMPLE_MAX_WORDS = 5_000;
 
-function chunkWordCount(chunk: Chunk): number {
-  const text = chunk.blocks
-    .map((block) => stripInlineTags(block.innerHtml).replace(/<[^>]+>/g, " "))
-    .join(" ");
+// A contents page is mostly link text; prose is mostly not. Half is a wide
+// margin: a real table of contents sits near 1.0, an annotated chapter with
+// footnote markers near 0.
+const NAVIGATION_LINK_RATIO = 0.5;
+
+const ANCHOR_RE = /<a\b[^>]*>([\s\S]*?)<\/a>/gi;
+
+function wordCount(html: string): number {
+  const text = stripInlineTags(html).replace(/<[^>]+>/g, " ");
   return text.match(/\S+/g)?.length ?? 0;
+}
+
+function chunkWordCount(chunk: Chunk): number {
+  return wordCount(chunk.blocks.map((block) => block.innerHtml).join(" "));
+}
+
+function linkedWordCount(chunk: Chunk): number {
+  const html = chunk.blocks.map((block) => block.innerHtml).join(" ");
+  let linked = 0;
+  for (const match of html.matchAll(ANCHOR_RE)) linked += wordCount(match[1] ?? "");
+  return linked;
+}
+
+/**
+ * Is this spine item navigation rather than a chapter?
+ *
+ * Word count alone cannot tell them apart: a web novel's contents page lists a
+ * hundred chapter titles, clears the 250-word floor comfortably, and so won the
+ * "first substantial chapter" race — the free sample translated the table of
+ * contents. The EPUB 3 `nav` manifest property would be the authoritative
+ * answer, but plenty of books (web-novel exports especially) ship an ordinary
+ * `contents.xhtml` in the spine that is never marked as one, so the shape of
+ * the text has to carry the decision.
+ */
+function isNavigation(chapter: Chunk[]): boolean {
+  const total = chapter.reduce((sum, chunk) => sum + chunkWordCount(chunk), 0);
+  if (total === 0) return false;
+  const linked = chapter.reduce((sum, chunk) => sum + linkedWordCount(chunk), 0);
+  return linked / total >= NAVIGATION_LINK_RATIO;
 }
 
 /**
@@ -125,9 +159,18 @@ export function takeFirstContentChapter(
   }
 
   const ordered = [...chapters.values()];
+  // Prose first. The navigation-free list is only a preference, not a filter:
+  // the original fallbacks stay behind it so a book we misread still yields a
+  // preview rather than nothing.
+  const prose = ordered.filter((chapter) => !isNavigation(chapter));
+  const substantial = (chapter: Chunk[]) =>
+    chapter.reduce((sum, chunk) => sum + chunkWordCount(chunk), 0) >= minContentWords;
+  const nonEmpty = (chapter: Chunk[]) => chapter.some((chunk) => chunkWordCount(chunk) > 0);
   const selected =
-    ordered.find((chapter) => chapter.reduce((sum, chunk) => sum + chunkWordCount(chunk), 0) >= minContentWords)
-    ?? ordered.find((chapter) => chapter.some((chunk) => chunkWordCount(chunk) > 0))
+    prose.find(substantial)
+    ?? prose.find(nonEmpty)
+    ?? ordered.find(substantial)
+    ?? ordered.find(nonEmpty)
     ?? ordered[0]!;
 
   const kept: Chunk[] = [];

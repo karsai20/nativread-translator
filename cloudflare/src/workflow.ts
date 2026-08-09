@@ -23,6 +23,23 @@ type TranslationOutcome =
  * the AI-budget ledger, so the shape is validated here rather than trusted —
  * a malformed header must fail the job, never write NaN into the ledger.
  */
+/**
+ * Hands a finished job's container slot back to the pool.
+ *
+ * Never throws: the translation's outcome is already decided by the time this
+ * runs, and failing to reclaim a slot must not turn a delivered book into an
+ * error. A container that is already gone is the success case anyway.
+ */
+async function releaseContainer(env: Env, jobId: string): Promise<void> {
+  try {
+    await translatorContainer(env, jobId).destroy();
+  } catch (error) {
+    console.warn(JSON.stringify({
+      event: "container-release-failed", jobId, error: safeError(error),
+    }));
+  }
+}
+
 function decodeMetadata(value: string | null): ContainerResultMetadata | null {
   if (!value || value.length > 8_192) return null;
   try {
@@ -89,11 +106,26 @@ export class TranslationWorkflow extends WorkflowEntrypoint<Env, TranslationWork
           const source = await this.env.ARTIFACTS.get(prepared.sourceKey);
           if (!source?.body) return { ok: false, errorCode: "source_missing" } as const;
 
+          // The containers runtime refuses a body whose length it cannot know,
+          // and an R2 stream carries none — every translation died here with
+          // "Provided readable stream must have a known length" before it ever
+          // reached the container. FixedLengthStream declares the size up
+          // front, so the book still streams through instead of being buffered
+          // whole in the isolate. The runner also reads `content-length` to
+          // enforce its own archive limit, so the header has to agree with it.
+          const sized = new FixedLengthStream(source.size);
+          source.body.pipeTo(sized.writable).catch((error: unknown) => {
+            console.error(JSON.stringify({
+              event: "source-stream-failed", jobId, error: safeError(error),
+            }));
+          });
+
           const container = translatorContainer(this.env, jobId);
           const response = await container.fetch("http://container/run", {
             method: "POST",
             headers: {
               "content-type": "application/epub+zip",
+              "content-length": String(source.size),
               "x-nativread-internal-token": this.env.CONTAINER_INTERNAL_TOKEN,
               "x-nativread-job-id": jobId,
               "x-nativread-source-hash": prepared.sourceHash,
@@ -101,7 +133,7 @@ export class TranslationWorkflow extends WorkflowEntrypoint<Env, TranslationWork
               "x-nativread-source-lang": prepared.sourceLanguage,
               "x-nativread-target-lang": prepared.targetLanguage,
             },
-            body: source.body,
+            body: sized.readable,
           });
 
           if (!response.ok || !response.body) {
@@ -124,7 +156,17 @@ export class TranslationWorkflow extends WorkflowEntrypoint<Env, TranslationWork
             await response.body.cancel("job no longer active");
             return { ok: false, errorCode: "job_cancelled" } as const;
           }
-          await this.env.ARTIFACTS.put(prepared.resultKey, response.body, {
+          // R2 refuses a stream whose length it cannot know, and the runner's
+          // `content-length` does not survive the container proxy — the same
+          // TypeError that killed the request leg then killed the result leg,
+          // after the whole book had already been paid for and translated.
+          // Buffering gives R2 an exact length and consumes the body, so a
+          // failed put cannot leave a dangling stream to hang the step.
+          // ponytail: holds the translated EPUB in memory; the isolate's 128 MB
+          // is comfortable against a 32 MB upload ceiling. Switch to a
+          // FixedLengthStream if the runner ever reports the output size.
+          const translated = await response.arrayBuffer();
+          await this.env.ARTIFACTS.put(prepared.resultKey, translated, {
             httpMetadata: { contentType: "application/epub+zip" },
             customMetadata: { jobId, sourceHash: prepared.sourceHash },
           });
@@ -135,6 +177,12 @@ export class TranslationWorkflow extends WorkflowEntrypoint<Env, TranslationWork
       console.error(JSON.stringify({ event: "workflow-translation-error", jobId, error: safeError(error) }));
       outcome = { ok: false, errorCode: "translation_infrastructure_error" };
     }
+
+    // The job is over either way, so its container has to give the slot back
+    // now rather than idle until `sleepAfter`. With `max_instances: 6` a
+    // handful of finished translations was enough to leave an upload with no
+    // container to be inspected in, which reads as "the upload is stuck".
+    await releaseContainer(this.env, jobId);
 
     if (!outcome.ok) {
       await step.do("record failed translation", async () => {

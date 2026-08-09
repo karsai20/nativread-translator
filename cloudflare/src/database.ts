@@ -158,6 +158,7 @@ export class UserDataRepository {
       "WHERE job_id = ? AND status = 'reserved' AND EXISTS (" +
       "SELECT 1 FROM jobs WHERE jobs.id = ai_budget_reservations.job_id AND jobs.user_id = ?)",
     ).bind(new Date().toISOString(), jobId, this.userId).run();
+    await releasePreviewClaim(this.db, jobId);
   }
 
   /**
@@ -419,6 +420,23 @@ export async function internalReleaseAIBudget(
     "UPDATE ai_budget_reservations SET status = 'refunded', actual_cents = 0, settled_at = ? " +
     "WHERE job_id = ? AND status = 'reserved'",
   ).bind(new Date().toISOString(), jobId).run();
+  await releasePreviewClaim(db, jobId);
+}
+
+/**
+ * Gives a failed job's free chapter back.
+ *
+ * The claim is taken before the translation runs, so a run that never delivered
+ * left the reader having spent their one free chapter on nothing — and every
+ * later attempt refused with "you have already used it". The refund rides along
+ * with the AI-budget refund because both answer the same question: this job took
+ * something and did not deliver.
+ *
+ * Keyed on `job_id`, so it can only ever release the claim this job itself made
+ * — a later job's claim on the same book is untouched.
+ */
+async function releasePreviewClaim(db: D1Database, jobId: string): Promise<void> {
+  await db.prepare("DELETE FROM preview_claims WHERE job_id = ?").bind(jobId).run();
 }
 
 async function claimPreview(db: D1Database, job: JobRow): Promise<boolean> {

@@ -13,6 +13,9 @@ import type { Env } from "./types";
  * branch by forgetting a variable. workerd does not implement jurisdictions,
  * so without the opt-out the container path cannot be exercised locally at all.
  */
+/** The one shared instance every upload's quote goes through. */
+export const INSPECT_CONTAINER = "inspect";
+
 export function translatorContainer(env: Env, name: string) {
   const namespace = env.LOCAL_DEV === "1"
     ? env.TRANSLATOR_CONTAINER
@@ -22,12 +25,19 @@ export function translatorContainer(env: Env, name: string) {
 
 export class TranslatorContainer extends Container<Env> {
   defaultPort = 8080;
-  // Inspection is sub-second, but a cold boot in front of it is not, and the
-  // shared inspect instance is what every quote goes through. At 2m a reader
-  // comparing two books paid a cold start for the second one.
-  // ponytail: 15m trades container time for quote latency; lower it if the
-  // container bill outgrows the wait it removes.
-  sleepAfter = "15m";
+  // Idle lifetime is per role, because the two roles want opposite things and
+  // `max_instances` is only 6.
+  //
+  // The shared inspect instance is worth keeping warm: every quote goes through
+  // it, and the cold boot in front of a sub-second parse IS the latency a
+  // reader feels. A per-job translation container is one-shot — once its job is
+  // over the instance is dead weight, and a long idle turns it into a squatter
+  // that holds a slot the next upload needs. A flat 15m filled all six slots
+  // with finished jobs and left uploads with no container to inspect in.
+  //
+  // The workflow destroys its own container explicitly; this is the net that
+  // catches the runs that die before they get there.
+  sleepAfter = this.ctx.id.name === INSPECT_CONTAINER ? "15m" : "2m";
   enableInternet = true;
   interceptHttps = true;
   allowedHosts = ["generativelanguage.googleapis.com"];
