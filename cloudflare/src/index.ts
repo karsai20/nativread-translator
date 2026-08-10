@@ -685,9 +685,12 @@ async function deleteAccount(request: Request, env: Env): Promise<Response> {
  * authenticate.
  */
 function pricing(): Response {
-  return json(pricingPayload(), {
-    headers: { "cache-control": "public, max-age=3600" },
-  });
+  const response = json(pricingPayload());
+  // Set after `json`, not through it: `securityHeaders` stamps
+  // `private, no-store` over whatever it is handed, which is right for every
+  // other route here and wrong for this one.
+  response.headers.set("cache-control", "public, max-age=3600");
+  return response;
 }
 
 async function route(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
