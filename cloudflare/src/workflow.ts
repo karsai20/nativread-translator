@@ -198,6 +198,12 @@ export class TranslationWorkflow extends WorkflowEntrypoint<Env, TranslationWork
     // handful of finished translations was enough to leave an upload with no
     // container to be inspected in, which reads as "the upload is stuck".
     await releaseContainer(this.env, jobId);
+    // Temporary instrumentation. Every finished run is killed with "your
+    // Worker's code had hung" even when all its steps succeeded, and settling
+    // the source pipe did not cure it. These two lines say whether `run()` ever
+    // reaches its own end: if "returning" is logged and the invocation is still
+    // cancelled, the unresolved promise is the engine's, not ours.
+    console.log(JSON.stringify({ event: "workflow-container-released", jobId }));
 
     if (!outcome.ok) {
       await step.do("record failed translation", async () => {
@@ -253,5 +259,6 @@ export class TranslationWorkflow extends WorkflowEntrypoint<Env, TranslationWork
         await settleSuccess(this.env.DB, job);
       }
     });
+    console.log(JSON.stringify({ event: "workflow-run-returning", jobId }));
   }
 }
