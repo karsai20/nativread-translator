@@ -1,6 +1,7 @@
 import type { TermsAcceptanceInput } from "./legal";
 import type { Env, JobRow } from "./types";
 import type { LanguagePair } from "../../lib/core/languages";
+import { CHARACTERS_PER_CREDIT, QUOTE_VERSION } from "../../lib/core/quote-version";
 import type { TermsRelease } from "./legal";
 
 /**
@@ -27,6 +28,23 @@ export type BookTier = (typeof BOOK_TIERS)[number];
 /** The tier a book falls into, or undefined when it is longer than the top tier covers. */
 export function bookTierFor(sourceCharacters: number): BookTier | undefined {
   return BOOK_TIERS.find((tier) => sourceCharacters <= tier.maxSourceCharacters);
+}
+
+/**
+ * The body of `GET /api/pricing` — everything the app needs to price a book
+ * itself. Lives here rather than in the route so it can be tested without
+ * importing the Worker entry point and its container bindings.
+ */
+export function pricingPayload() {
+  return {
+    quoteVersion: QUOTE_VERSION,
+    charactersPerCredit: CHARACTERS_PER_CREDIT,
+    tiers: BOOK_TIERS.map((tier) => ({
+      tier: tier.tier,
+      maxSourceCharacters: tier.maxSourceCharacters,
+      productId: tier.productId,
+    })),
+  };
 }
 
 export interface PendingJobInput {

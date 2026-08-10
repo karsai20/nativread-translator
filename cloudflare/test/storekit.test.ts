@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { SignJWT, exportPKCS8, generateKeyPair } from "jose";
 
-import { bookTierFor } from "../src/database";
+import {
+  CHARACTERS_PER_CREDIT as METERING_CHARACTERS_PER_CREDIT,
+  QUOTE_VERSION as METERING_QUOTE_VERSION,
+} from "../../lib/core/metering";
+import { CHARACTERS_PER_CREDIT, QUOTE_VERSION } from "../../lib/core/quote-version";
+import { BOOK_TIERS, bookTierFor, pricingPayload } from "../src/database";
 import { HttpError, appAccountTokenFor } from "../src/security";
 import { appStoreTransaction, transactionRejection } from "../src/storekit";
 import type { AppStoreTransaction } from "../src/storekit";
@@ -59,6 +64,34 @@ describe("book pricing tiers", () => {
   test("refuses a book longer than the top tier covers", () => {
     expect(bookTierFor(3_000_000)?.tier).toBe(6);
     expect(bookTierFor(3_000_001)).toBeUndefined();
+  });
+});
+
+describe("GET /api/pricing payload", () => {
+  test("publishes every tier in ascending order", () => {
+    const payload = pricingPayload();
+
+    expect(payload.tiers).toHaveLength(BOOK_TIERS.length);
+    expect(payload.tiers.map((tier) => tier.tier)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(payload.tiers.map((tier) => tier.maxSourceCharacters))
+      .toEqual([150_000, 300_000, 500_000, 800_000, 1_200_000, 3_000_000]);
+    expect(payload.tiers[0].productId).toBe("com.karsai.nativread.book.t1");
+  });
+
+  test("carries the counting rules the app compares its port against", () => {
+    // The app shows a locally computed price only while these match its own
+    // constants. Publishing a stale version would let it price a book with
+    // rules the server no longer uses.
+    expect(pricingPayload().quoteVersion).toBe(QUOTE_VERSION);
+    expect(pricingPayload().charactersPerCredit).toBe(CHARACTERS_PER_CREDIT);
+  });
+
+  test("agrees with the metering module the container actually runs", () => {
+    // `metering.ts` re-exports the leaf constants; if that re-export is ever
+    // replaced by a second literal, the app would trust a version the counter
+    // no longer uses.
+    expect(METERING_QUOTE_VERSION).toBe(QUOTE_VERSION);
+    expect(METERING_CHARACTERS_PER_CREDIT).toBe(CHARACTERS_PER_CREDIT);
   });
 });
 

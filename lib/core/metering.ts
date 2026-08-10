@@ -2,9 +2,9 @@ import { parse } from "node-html-parser";
 
 import { chunkSpineItem } from "./chunker";
 import type { Epub } from "./epub";
+import { CHARACTERS_PER_CREDIT, QUOTE_VERSION } from "./quote-version";
 
-export const CHARACTERS_PER_CREDIT = 1_000;
-export const QUOTE_VERSION = "source-chars-v1";
+export { CHARACTERS_PER_CREDIT, QUOTE_VERSION };
 
 export interface TranslationQuote {
   version: typeof QUOTE_VERSION;
