@@ -7,6 +7,7 @@ import {
   bookTierFor,
   internalJobById,
   internalReleaseAIBudget,
+  pricingPayload,
 } from "./database";
 import {
   honouredVersions,
@@ -668,11 +669,33 @@ async function deleteAccount(request: Request, env: Env): Promise<Response> {
   return json({ ok: true });
 }
 
+/**
+ * What a book costs, before anyone uploads one.
+ *
+ * The app ships a port of the character counter, so it can name a book's price
+ * on device in milliseconds instead of making the reader wait for an upload.
+ * That only works while the two agree, which is what this endpoint settles: the
+ * app compares `quoteVersion` against its own port and falls back to a server
+ * quote whenever they differ, and it reads the tiers from here rather than from
+ * a table baked into a shipped binary — so moving a price boundary stays a
+ * deploy, not an App Store release.
+ *
+ * Public and cacheable: product identifiers and their thresholds are not
+ * secrets, and the reader needs the price before there is an account to
+ * authenticate.
+ */
+function pricing(): Response {
+  return json(pricingPayload(), {
+    headers: { "cache-control": "public, max-age=3600" },
+  });
+}
+
 async function route(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   const key = `${request.method} ${url.pathname}`;
   switch (key) {
     case "GET /health": return json({ ok: true, service: "nativread-api" });
+    case "GET /api/pricing": return pricing();
     case "POST /api/auth/apple": return authApple(request, env);
     case "POST /api/upload": return upload(request, env);
     case "POST /api/purchase": return purchase(request, env);
