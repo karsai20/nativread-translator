@@ -208,6 +208,10 @@ export async function enforceRateLimit(
   bucket: string,
   limit: number,
   windowSeconds: number,
+  exhausted: { message: string; code: string } = {
+    message: "Túl sok kérés. Próbáld újra később.",
+    code: "rate_limited",
+  },
 ): Promise<void> {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const windowStart = new Date(Math.floor(nowSeconds / windowSeconds) * windowSeconds * 1000).toISOString();
@@ -216,7 +220,7 @@ export async function enforceRateLimit(
     "ON CONFLICT(subject, bucket, window_start) DO UPDATE SET count = count + 1 WHERE count < ? " +
     "RETURNING count",
   ).bind(subject, bucket, windowStart, limit).first<{ count: number }>();
-  if (!row) throw new HttpError(429, "Túl sok kérés. Próbáld újra később.", "rate_limited");
+  if (!row) throw new HttpError(429, exhausted.message, exhausted.code);
 }
 
 export function objectPrefix(userId: string): string {

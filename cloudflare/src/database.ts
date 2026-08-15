@@ -1,3 +1,4 @@
+import { enforceRateLimit } from "./security";
 import type { TermsAcceptanceInput } from "./legal";
 import type { Env, JobRow } from "./types";
 import type { LanguagePair } from "../../lib/core/languages";
@@ -457,15 +458,65 @@ async function releasePreviewClaim(db: D1Database, jobId: string): Promise<void>
   await db.prepare("DELETE FROM preview_claims WHERE job_id = ?").bind(jobId).run();
 }
 
+/**
+ * Free chapters a reader may take back in any seven days.
+ *
+ * The bound is on *re-claims*, not on first tastes: a new reader sampling the
+ * books already on their shelf is the funnel working, and throttling that would
+ * cost more than the samples do. What needs bounding is the loop — delete,
+ * claim again, repeat — which is the only way a per-book allowance turns into an
+ * unlimited one.
+ */
+const PREVIEW_RECLAIMS_PER_WEEK = 3;
+const PREVIEW_RECLAIM_WINDOW_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * Takes the free chapter for this book, or says it is already spent.
+ *
+ * A claim can be taken back. The delivered sample only lives in R2 for a day,
+ * and a reader who deletes the book has nothing left to read — so once the
+ * earlier claim's job can no longer deliver anything, the book may be sampled
+ * again. That is what makes an accidental deletion recoverable without handing
+ * out an endless supply of free chapters: the weekly ceiling is what stops the
+ * delete-and-claim loop.
+ *
+ * The row moves to the new job rather than a second row being added, so a book
+ * still holds exactly one claim and `releasePreviewClaim` still refunds by job.
+ */
 async function claimPreview(db: D1Database, job: JobRow): Promise<boolean> {
+  const now = new Date().toISOString();
   const result = await db.prepare(
     "INSERT OR IGNORE INTO preview_claims (user_id, source_hash, job_id, created_at) VALUES (?, ?, ?, ?)",
-  ).bind(job.user_id, job.source_hash, job.id, new Date().toISOString()).run();
+  ).bind(job.user_id, job.source_hash, job.id, now).run();
   if ((result.meta.changes ?? 0) === 1) return true;
   const existing = await db.prepare(
     "SELECT job_id FROM preview_claims WHERE user_id = ? AND source_hash = ?",
   ).bind(job.user_id, job.source_hash).first<{ job_id: string }>();
-  return existing?.job_id === job.id;
+  if (!existing) return false;
+  if (existing.job_id === job.id) return true;
+
+  // A sample that is still downloadable is not lost, so there is nothing to
+  // give back — re-reading it costs the reader nothing but a tap.
+  const previous = await db.prepare(
+    "SELECT result_key FROM jobs WHERE id = ?",
+  ).bind(existing.job_id).first<{ result_key: string | null }>();
+  if (previous?.result_key) return false;
+
+  await enforceRateLimit(
+    db,
+    job.user_id,
+    "preview-reclaim-week",
+    PREVIEW_RECLAIMS_PER_WEEK,
+    PREVIEW_RECLAIM_WINDOW_SECONDS,
+    {
+      message: "Ezen a héten elfogyott az újra kérhető ingyenes fejezetek száma. Jövő héten újra próbálhatod.",
+      code: "preview_reclaim_limit",
+    },
+  );
+  const moved = await db.prepare(
+    "UPDATE preview_claims SET job_id = ?, created_at = ? WHERE user_id = ? AND source_hash = ? AND job_id = ?",
+  ).bind(job.id, now, job.user_id, job.source_hash, existing.job_id).run();
+  return (moved.meta.changes ?? 0) === 1;
 }
 
 /**
