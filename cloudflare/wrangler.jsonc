@@ -26,6 +26,14 @@
     // not as a side effect of publishing new terms. Each entry keeps its own
     // effective date and document URL, so the acceptance recorded against it
     // stays exact evidence.
+    //
+    // Bumping TERMS_VERSION: publish the document first, then move the outgoing
+    // version here in the same change. A version that ships inside an app build
+    // but is missing from this list locks that build out of translating
+    // entirely — 2026-08-03 did exactly that to the 2026-08-04 TestFlight
+    // build, and the reader was told to accept terms they had just accepted.
+    // 2026-08-03 stays unhonoured on purpose: its document was never published,
+    // so there is nothing an acceptance could point at.
     "TERMS_SUPERSEDED": [
       {
         "version": "2026-07-22",

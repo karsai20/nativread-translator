@@ -449,9 +449,20 @@ async function startTranslation(request: Request, env: Env): Promise<Response> {
   // an app build in a user's hands cannot be updated in step with a deploy.
   // The release the client names is what gets recorded, so the evidence stays
   // exact even while two versions are live.
-  const termsRelease = termsReleaseFor(body.termsVersion, env);
-  if (body.rightsAttested !== true || body.termsAccepted !== true || !termsRelease) {
+  if (body.rightsAttested !== true || body.termsAccepted !== true) {
     throw new HttpError(403, "A fordítás előtt fogadd el az aktuális felhasználási feltételeket.");
+  }
+  const termsRelease = termsReleaseFor(body.termsVersion, env);
+  if (!termsRelease) {
+    // The reader did accept — they accepted a release this deployment no longer
+    // honours, which no amount of accepting again can fix. Telling them to
+    // accept the terms here is what made this a dead end: the app had just
+    // walked them through the checkbox.
+    throw new HttpError(
+      403,
+      "Ez az appverzió elavult felhasználási feltételeket mutat. Frissítsd az appot, és próbáld újra.",
+      "terms_version_unsupported",
+    );
   }
   const termsAcceptance = validateTermsAcceptance(body.termsAcceptance, env, termsRelease);
   if (
@@ -770,7 +781,9 @@ async function retentionSweep(env: Env): Promise<void> {
       await (await env.TRANSLATION_WORKFLOW.get(job.workflow_instance_id)).terminate().catch(() => undefined);
     }
   }
-  const rateCutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+  // Longer than the longest window any bucket uses (the weekly free-chapter
+  // ceiling), or the sweep would hand the allowance back early.
+  const rateCutoff = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
   const eventCutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   await env.DB.batch([
     env.DB.prepare("DELETE FROM rate_limits WHERE window_start < ?").bind(rateCutoff),
