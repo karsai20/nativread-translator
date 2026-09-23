@@ -1,7 +1,7 @@
 import { enforceRateLimit } from "./security";
 import type { TermsAcceptanceInput } from "./legal";
 import type { Env, JobRow } from "./types";
-import type { LanguagePair } from "../../lib/core/languages";
+import { validatedPairs, type LanguagePair, type PairPolicy } from "../../lib/core/languages";
 import { CHARACTERS_PER_CREDIT, QUOTE_VERSION } from "../../lib/core/quote-version";
 import type { TermsRelease } from "./legal";
 
@@ -41,7 +41,7 @@ export function bookTierFor(sourceCharacters: number): BookTier | undefined {
  * itself. Lives here rather than in the route so it can be tested without
  * importing the Worker entry point and its container bindings.
  */
-export function pricingPayload() {
+export function pricingPayload(pairs: readonly PairPolicy[] = validatedPairs()) {
   return {
     quoteVersion: QUOTE_VERSION,
     charactersPerCredit: CHARACTERS_PER_CREDIT,
@@ -50,6 +50,9 @@ export function pricingPayload() {
       maxSourceCharacters: tier.maxSourceCharacters,
       productId: tier.productId,
     })),
+    // Which languages the app may offer, so turning the testing switch off
+    // takes them out of the picker instead of failing after an upload.
+    languagePairs: pairs.map((p) => ({ source: p.source, target: p.target, validated: p.validated })),
   };
 }
 

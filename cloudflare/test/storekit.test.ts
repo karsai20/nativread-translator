@@ -7,6 +7,7 @@ import {
 } from "../../lib/core/metering";
 import { CHARACTERS_PER_CREDIT, QUOTE_VERSION } from "../../lib/core/quote-version";
 import { BOOK_TIERS, bookTierFor, pricingPayload } from "../src/database";
+import { openPairs } from "../../lib/core/languages";
 import { HttpError, appAccountTokenFor } from "../src/security";
 import { appStoreTransaction, transactionRejection } from "../src/storekit";
 import type { AppStoreTransaction } from "../src/storekit";
@@ -227,5 +228,19 @@ describe("purchase account binding", () => {
     expect(appAccountTokenFor(USER_ID)).toBe("ab12cd34-ef56-ab78-cd90-ef12ab34cd56");
     expect(appAccountTokenFor(USER_ID)).toBe(appAccountTokenFor(USER_ID));
     expect(appAccountTokenFor("0".repeat(64))).not.toBe(appAccountTokenFor(USER_ID));
+  });
+});
+
+describe("open language pairs", () => {
+  test("only validated pairs are open, and advertised, by default", () => {
+    const pairs = pricingPayload().languagePairs;
+    expect(pairs).toEqual([{ source: "en", target: "hu", validated: true }]);
+  });
+
+  test("the testing switch opens every registered pair, marked unvalidated", () => {
+    const pairs = pricingPayload(openPairs(true)).languagePairs;
+    expect(pairs).toContainEqual({ source: "en", target: "hu", validated: true });
+    expect(pairs).toContainEqual({ source: "hu", target: "en", validated: false });
+    expect(pairs.length).toBeGreaterThan(1);
   });
 });

@@ -42,8 +42,7 @@ import { TranslationWorkflow } from "./workflow";
 import {
   DEFAULT_PAIR,
   isLanguageCode,
-  isValidatedPair,
-  policyFor,
+  openPairs,
   languageName,
   validatedPairs,
   type LanguagePair,
@@ -443,8 +442,9 @@ async function startTranslation(request: Request, env: Env): Promise<Response> {
   // Testing switch: while ALLOW_UNVALIDATED_PAIRS is "1", every registered
   // pair passes, so unread languages can be tried from the app. It must be
   // "0" before launch — `validated` is the release gate, this only opens it.
-  const allowsUnvalidated = env.ALLOW_UNVALIDATED_PAIRS === "1" && policyFor(pair) !== undefined;
-  if (!isValidatedPair(pair) && !allowsUnvalidated) {
+  const isOpen = openPairs(allowsUnvalidatedPairs(env))
+    .some((p) => p.source === pair.source && p.target === pair.target);
+  if (!isOpen) {
     const open = validatedPairs()
       .map((p) => `${languageName(p.source)} → ${languageName(p.target)}`)
       .join(", ");
@@ -700,8 +700,12 @@ async function deleteAccount(request: Request, env: Env): Promise<Response> {
  * secrets, and the reader needs the price before there is an account to
  * authenticate.
  */
-function pricing(): Response {
-  const response = json(pricingPayload());
+function allowsUnvalidatedPairs(env: Env): boolean {
+  return env.ALLOW_UNVALIDATED_PAIRS === "1";
+}
+
+function pricing(env: Env): Response {
+  const response = json(pricingPayload(openPairs(allowsUnvalidatedPairs(env))));
   // Set after `json`, not through it: `securityHeaders` stamps
   // `private, no-store` over whatever it is handed, which is right for every
   // other route here and wrong for this one.
@@ -714,7 +718,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   const key = `${request.method} ${url.pathname}`;
   switch (key) {
     case "GET /health": return json({ ok: true, service: "nativread-api" });
-    case "GET /api/pricing": return pricing();
+    case "GET /api/pricing": return pricing(env);
     case "POST /api/auth/apple": return authApple(request, env);
     case "POST /api/upload": return upload(request, env);
     case "POST /api/purchase": return purchase(request, env);

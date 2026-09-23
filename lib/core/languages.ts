@@ -141,6 +141,15 @@ export function validatedPairs(): readonly PairPolicy[] {
   return PAIRS.filter((p) => p.validated);
 }
 
+/**
+ * Pairs a translation may start on: the validated ones, plus — while the
+ * testing switch is on — every registered pair. The one place both the start
+ * gate and the app's language list read from.
+ */
+export function openPairs(allowUnvalidated: boolean): readonly PairPolicy[] {
+  return PAIRS.filter((p) => p.validated || allowUnvalidated);
+}
+
 export function isValidatedPair(pair: LanguagePair): boolean {
   return policyFor(pair)?.validated === true;
 }
