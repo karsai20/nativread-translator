@@ -22,6 +22,11 @@ export const BOOK_TIERS = [
   { tier: 4, maxSourceCharacters: 800_000, productId: "com.karsai.nativread.book.t4" },
   { tier: 5, maxSourceCharacters: 1_200_000, productId: "com.karsai.nativread.book.t5" },
   { tier: 6, maxSourceCharacters: 3_000_000, productId: "com.karsai.nativread.book.t6" },
+  // Web-novel volumes run 3–12M characters. Priced thinner (58% / 39%
+  // contribution at €17.99 / €24.99): a reader of a 40-novel-long serial
+  // will not pay €50 for one book. Anything longer waits for per-part sales.
+  { tier: 7, maxSourceCharacters: 6_000_000, productId: "com.karsai.nativread.book.t7" },
+  { tier: 8, maxSourceCharacters: 12_000_000, productId: "com.karsai.nativread.book.t8" },
 ] as const;
 
 export type BookTier = (typeof BOOK_TIERS)[number];

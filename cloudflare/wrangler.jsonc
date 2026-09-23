@@ -48,11 +48,11 @@
     "AI_PROVIDER_DISCLOSURE": "Google Gemini API",
     "MAX_EPUB_UPLOAD_BYTES": "33554432",
     "MAX_EPUB_UNCOMPRESSED_BYTES": "134217728",
-    "MAX_EPUB_ENTRIES": "2000",
+    "MAX_EPUB_ENTRIES": "4000",
     "MAX_ACTIVE_TRANSLATIONS": "4",
     // Safety valve against a runaway pipeline, not a business limit: at
     // ~$2.18/book the daily cap still clears several full-length books.
-    "GLOBAL_DAILY_AI_BUDGET_USD": "20",
+    "GLOBAL_DAILY_AI_BUDGET_USD": "40",
     "GLOBAL_MONTHLY_AI_BUDGET_USD": "100",
     "ARTIFACT_RETENTION_HOURS": "24",
     "TRANSLATION_CONCURRENCY": "4",
@@ -60,9 +60,10 @@
     "TRANSLATION_REFINE_SELECTIVE": "1",
     "TRANSLATION_REASONER_HARD": "1",
     "TRANSLATION_PRECISION": "balanced",
-    // A book at the top tier's character cap costs ~$2.73; a $3 ceiling would
-    // abort it mid-translation after the customer had already paid.
-    "COST_CEILING_USD": "5",
+    // A book at the top tier's character cap (12M) costs ~$10.90; a ceiling
+    // under that would abort it mid-translation after the customer had
+    // already paid. 1.5x headroom for retries and escalations.
+    "COST_CEILING_USD": "18",
     "REQUIRE_TRANSLATION_ENTITLEMENTS": "1",
     "ALLOW_DEV_AUTH": "0",
     "APP_STORE_BUNDLE_ID": "com.karsai.nativread"
