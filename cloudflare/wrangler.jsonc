@@ -66,6 +66,9 @@
     "COST_CEILING_USD": "18",
     "REQUIRE_TRANSLATION_ENTITLEMENTS": "1",
     "ALLOW_DEV_AUTH": "0",
+    // Lets unvalidated language pairs (EN→DE/ES, HU/DE/ES→EN, DE/ES→HU) be
+    // tried from the app while they are being read. Set to "0" before launch.
+    "ALLOW_UNVALIDATED_PAIRS": "1",
     "APP_STORE_BUNDLE_ID": "com.karsai.nativread"
   },
   "d1_databases": [

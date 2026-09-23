@@ -89,6 +89,8 @@ export interface Env {
   MAX_EPUB_UPLOAD_BYTES: string;
   MAX_EPUB_UNCOMPRESSED_BYTES: string;
   MAX_EPUB_ENTRIES: string;
+  /** "1" lets registered-but-unvalidated language pairs through, for testing. */
+  ALLOW_UNVALIDATED_PAIRS?: string;
   MAX_ACTIVE_TRANSLATIONS: string;
   GLOBAL_DAILY_AI_BUDGET_USD: string;
   GLOBAL_MONTHLY_AI_BUDGET_USD: string;

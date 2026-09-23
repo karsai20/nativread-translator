@@ -43,6 +43,7 @@ import {
   DEFAULT_PAIR,
   isLanguageCode,
   isValidatedPair,
+  policyFor,
   languageName,
   validatedPairs,
   type LanguagePair,
@@ -439,7 +440,11 @@ async function startTranslation(request: Request, env: Env): Promise<Response> {
   if (!isLanguageCode(pair.source) || !isLanguageCode(pair.target)) {
     throw new HttpError(400, "Ismeretlen nyelv.");
   }
-  if (!isValidatedPair(pair)) {
+  // Testing switch: while ALLOW_UNVALIDATED_PAIRS is "1", every registered
+  // pair passes, so unread languages can be tried from the app. It must be
+  // "0" before launch — `validated` is the release gate, this only opens it.
+  const allowsUnvalidated = env.ALLOW_UNVALIDATED_PAIRS === "1" && policyFor(pair) !== undefined;
+  if (!isValidatedPair(pair) && !allowsUnvalidated) {
     const open = validatedPairs()
       .map((p) => `${languageName(p.source)} → ${languageName(p.target)}`)
       .join(", ");
