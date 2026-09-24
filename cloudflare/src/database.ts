@@ -36,6 +36,37 @@ export function bookTierFor(sourceCharacters: number): BookTier | undefined {
   return BOOK_TIERS.find((tier) => sourceCharacters <= tier.maxSourceCharacters);
 }
 
+/** The tier an App Store product id sells, or undefined for anything else. */
+export function bookTierForProduct(productId: string): BookTier | undefined {
+  return BOOK_TIERS.find((tier) => tier.productId === productId);
+}
+
+/**
+ * How many tiers below the server's count a purchase may be and still stand.
+ * The app prices a book on device before it is uploaded, with a port of the
+ * server's counter; a book on a tier boundary can land one tier apart, and the
+ * reader keeps the price they were shown. Two tiers apart is not a rounding.
+ */
+const PAID_TIER_TOLERANCE = 1;
+
+export function paidTierCovers(paidTier: number, serverTier: number): boolean {
+  return paidTier >= serverTier - PAID_TIER_TOLERANCE;
+}
+
+/**
+ * Whether a full translation may start: an entitlement for this book and
+ * language, and — when an App Store purchase stands behind it — one for a tier
+ * close enough to the one the server counted.
+ */
+export function entitlementStands(input: {
+  entitled: boolean;
+  paidTier: number | null;
+  serverTier: number;
+}): boolean {
+  if (!input.entitled) return false;
+  return input.paidTier === null || paidTierCovers(input.paidTier, input.serverTier);
+}
+
 /**
  * The body of `GET /api/pricing` — everything the app needs to price a book
  * itself. Lives here rather than in the route so it can be tested without
@@ -195,6 +226,18 @@ export class UserDataRepository {
    */
   async recordBookPurchase(job: JobRow, purchase: BookPurchaseInput): Promise<BookPurchaseResult> {
     this.assertOwnedJob(job);
+    return this.recordBookPurchaseFor(job.source_hash, job.target_language, purchase);
+  }
+
+  /**
+   * Records a purchase for a book by its content hash, before (or without) an
+   * upload: the book never has to leave the device just to be paid for.
+   */
+  async recordBookPurchaseFor(
+    sourceHash: string,
+    targetLanguage: string,
+    purchase: BookPurchaseInput,
+  ): Promise<BookPurchaseResult> {
     // RETURNING, not the affected-row count: the entitlement trigger also writes
     // a row, and how that is counted differs between D1 and a local SQLite.
     const inserted = await this.db.prepare(
@@ -206,20 +249,46 @@ export class UserDataRepository {
       purchase.transactionId,
       this.userId,
       purchase.productId,
-      job.source_hash,
-      job.target_language,
+      sourceHash,
+      targetLanguage,
       purchase.environment,
       new Date().toISOString(),
     ).first<{ transaction_id: string }>();
     if (inserted) return { applied: true };
 
     // The transaction id was already spent. Only the same owner buying the same
-    // book is a replay; anything else is one account claiming another's receipt.
+    // book into the same language is a replay; anything else is one receipt
+    // being claimed twice.
     const existing = await this.db.prepare(
-      "SELECT user_id, source_hash FROM book_purchases WHERE transaction_id = ?",
-    ).bind(purchase.transactionId).first<{ user_id: string; source_hash: string }>();
-    const isReplay = existing?.user_id === this.userId && existing.source_hash === job.source_hash;
+      "SELECT user_id, source_hash, target_language FROM book_purchases WHERE transaction_id = ?",
+    ).bind(purchase.transactionId).first<{ user_id: string; source_hash: string; target_language: string }>();
+    const isReplay = existing?.user_id === this.userId
+      && existing.source_hash === sourceHash
+      && existing.target_language === targetLanguage;
     return isReplay ? { applied: false } : { applied: false, conflict: true };
+  }
+
+  /** Every language this account may translate the book into. */
+  async entitledLanguages(sourceHash: string): Promise<string[]> {
+    const rows = await this.db.prepare(
+      "SELECT target_language FROM entitlements WHERE user_id = ? AND source_hash = ? " +
+      "ORDER BY target_language",
+    ).bind(this.userId, sourceHash).all<{ target_language: string }>();
+    return rows.results.map((row) => row.target_language);
+  }
+
+  /**
+   * The highest tier bought for this book and language, or null when no App
+   * Store purchase stands behind the entitlement (a grant made another way).
+   */
+  async paidTier(sourceHash: string, targetLanguage: string): Promise<number | null> {
+    const rows = await this.db.prepare(
+      "SELECT product_id FROM book_purchases WHERE user_id = ? AND source_hash = ? AND target_language = ?",
+    ).bind(this.userId, sourceHash, targetLanguage).all<{ product_id: string }>();
+    const tiers = rows.results
+      .map((row) => bookTierForProduct(row.product_id)?.tier)
+      .filter((tier): tier is NonNullable<typeof tier> => tier !== undefined);
+    return tiers.length ? Math.max(...tiers) : null;
   }
 
   async claimJobPreview(job: JobRow): Promise<boolean> {

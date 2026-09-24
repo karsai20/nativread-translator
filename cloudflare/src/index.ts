@@ -5,6 +5,7 @@ import type { BookPurchaseInput } from "./database";
 import {
   UserDataRepository,
   bookTierFor,
+  entitlementStands,
   internalJobById,
   internalReleaseAIBudget,
   pricingPayload,
@@ -36,6 +37,7 @@ import {
   sha256,
   sourceKey,
 } from "./security";
+import { SOURCE_HASH_PATTERN, UUID_PATTERN, parsePurchaseRequest } from "./purchase-request";
 import { appStoreTransaction, transactionRejection } from "./storekit";
 import type { Env, JobRow, TranslationMessage } from "./types";
 import { TranslationWorkflow } from "./workflow";
@@ -56,7 +58,6 @@ export { TranslationWorkflow, TranslatorContainer };
 export { ContainerProxy } from "@cloudflare/containers";
 
 const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 function integerEnv(value: string, fallback: number, min: number, max: number): number {
   const parsed = Number(value);
@@ -286,9 +287,7 @@ async function upload(request: Request, env: Env): Promise<Response> {
       tier: tier.tier,
       sourceCharacters: inspected.quote.sourceCharacters,
     };
-    const entitledLanguages = await userData.entitled(inspected.sourceHash, "hu")
-      ? ["hu"]
-      : [];
+    const entitledLanguages = await userData.entitledLanguages(inspected.sourceHash);
     const existing = await userData.completedTranslation(inspected.sourceHash, "hu");
     if (existing?.result_key && await env.ARTIFACTS.head(existing.result_key)) {
       await env.ARTIFACTS.delete(key);
@@ -348,12 +347,27 @@ async function purchase(request: Request, env: Env): Promise<Response> {
   const userData = new UserDataRepository(env.DB, userId);
   await enforceRateLimit(env.DB, userId, "purchase-hour", 20, 60 * 60);
 
-  const body = await parseSmallJson<{ id?: unknown; transactionId?: unknown }>(request);
-  if (typeof body.id !== "string" || !UUID_PATTERN.test(body.id)) {
-    throw new HttpError(400, "Érvénytelen fordításazonosító.");
-  }
-  if (typeof body.transactionId !== "string" || !/^[A-Za-z0-9._-]{1,64}$/u.test(body.transactionId)) {
-    throw new HttpError(400, "Érvénytelen tranzakcióazonosító.");
+  const body = parsePurchaseRequest(await parseSmallJson<Record<string, unknown>>(request));
+
+  // Paying before the upload: the book is named by its hash, and the tier is
+  // the one the device priced it at. Whether that tier covers the book is
+  // checked when the translation starts, against the server's own count.
+  if (body.kind === "book") {
+    const purchased = await verifiedPurchase(body.transactionId, env, userId, body.productId);
+    if (typeof purchased === "string") {
+      await recordSecurityEvent(env.DB, userId, "storekit-rejected", `${purchased}:${body.transactionId}`);
+      throw new HttpError(409, "Ez a vásárlás nem érvényes ehhez a könyvhöz.");
+    }
+    const recorded = await userData.recordBookPurchaseFor(body.sourceHash, body.targetLanguage, purchased);
+    if (recorded.conflict) {
+      await recordSecurityEvent(env.DB, userId, "storekit-replay", `foreign:${body.transactionId}`);
+      throw new HttpError(409, "Ez a tranzakció már egy másik vásárláshoz tartozik.");
+    }
+    return json({
+      ok: true,
+      applied: recorded.applied,
+      entitledLanguages: await userData.entitledLanguages(body.sourceHash),
+    });
   }
 
   const job = await userData.job(body.id);
@@ -372,7 +386,27 @@ async function purchase(request: Request, env: Env): Promise<Response> {
     await recordSecurityEvent(env.DB, userId, "storekit-replay", `foreign:${body.transactionId}`);
     throw new HttpError(409, "Ez a tranzakció már egy másik vásárláshoz tartozik.");
   }
-  return json({ ok: true, applied: recorded.applied, entitledLanguages: ["hu"] });
+  return json({
+    ok: true,
+    applied: recorded.applied,
+    entitledLanguages: await userData.entitledLanguages(job.source_hash),
+  });
+}
+
+/**
+ * Whether this account already owns a book's translation, asked before the
+ * book is uploaded: the app checks by content hash so a reader who bought it
+ * on another device is not charged again, and nothing leaves the phone.
+ */
+async function entitlement(request: Request, env: Env): Promise<Response> {
+  const userId = await requireUser(request, env);
+  const userData = new UserDataRepository(env.DB, userId);
+  await enforceRateLimit(env.DB, userId, "entitlement-hour", 120, 60 * 60);
+  const sourceHash = new URL(request.url).searchParams.get("sourceHash") ?? "";
+  if (!SOURCE_HASH_PATTERN.test(sourceHash)) {
+    throw new HttpError(400, "Érvénytelen könyvazonosító.");
+  }
+  return json({ entitledLanguages: await userData.entitledLanguages(sourceHash) });
 }
 
 /**
@@ -515,9 +549,15 @@ async function startTranslation(request: Request, env: Env): Promise<Response> {
         throw new HttpError(409, "Ehhez a könyvhöz az ingyenes fejezetet már felhasználtad.");
       }
     } else if (env.REQUIRE_TRANSLATION_ENTITLEMENTS === "1") {
-      if (!(await userData.entitled(job.source_hash, "hu"))) {
+      const serverTier = bookTierFor(job.source_characters);
+      const stands = serverTier !== undefined && entitlementStands({
+        entitled: await userData.entitled(job.source_hash, pair.target),
+        paidTier: await userData.paidTier(job.source_hash, pair.target),
+        serverTier: serverTier.tier,
+      });
+      if (!stands) {
         if (budgetReservation.acquired) await userData.releaseJobBudget(job.id);
-        const tier = bookTierFor(job.source_characters);
+        const tier = serverTier;
         return json(
           {
             error: "Ehhez a könyvhöz még nincs megvásárolt fordítás.",
@@ -722,6 +762,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
     case "POST /api/auth/apple": return authApple(request, env);
     case "POST /api/upload": return upload(request, env);
     case "POST /api/purchase": return purchase(request, env);
+    case "GET /api/entitlement": return entitlement(request, env);
     case "POST /api/translate": return startTranslation(request, env);
     case "GET /api/status": return status(request, env);
     case "GET /api/result": return result(request, env, context);
