@@ -60,13 +60,14 @@ describe("book pricing tiers", () => {
     expect(bookTierFor(150_000)?.tier).toBe(1);
     expect(bookTierFor(150_001)?.tier).toBe(2);
     expect(bookTierFor(2_400_000)?.tier).toBe(6);
-    expect(bookTierFor(3_062_184)?.tier).toBe(7);
-    expect(bookTierFor(12_000_000)?.tier).toBe(8);
+    expect(bookTierFor(3_000_000)?.tier).toBe(6);
   });
 
   test("refuses a book longer than the top tier covers", () => {
-    expect(bookTierFor(12_000_000)?.tier).toBe(8);
-    expect(bookTierFor(12_000_001)).toBeUndefined();
+    // Above 3M a book would cost more to translate than the price readers
+    // pay (≤ 2990 Ft / €9.99) leaves after VAT and commission.
+    expect(bookTierFor(3_000_001)).toBeUndefined();
+    expect(bookTierFor(3_062_184)).toBeUndefined();
     expect(bookTierFor(21_966_971)).toBeUndefined();
   });
 });
@@ -76,9 +77,9 @@ describe("GET /api/pricing payload", () => {
     const payload = pricingPayload();
 
     expect(payload.tiers).toHaveLength(BOOK_TIERS.length);
-    expect(payload.tiers.map((tier) => tier.tier)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(payload.tiers.map((tier) => tier.tier)).toEqual([1, 2, 3, 4, 5, 6]);
     expect(payload.tiers.map((tier) => tier.maxSourceCharacters))
-      .toEqual([150_000, 300_000, 500_000, 800_000, 1_200_000, 3_000_000, 6_000_000, 12_000_000]);
+      .toEqual([150_000, 300_000, 500_000, 800_000, 1_200_000, 3_000_000]);
     expect(payload.tiers[0].productId).toBe("com.karsai.nativread.book.t1");
   });
 

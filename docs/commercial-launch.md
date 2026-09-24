@@ -36,12 +36,15 @@ and product decision record, not legal advice.
   unusable remainders, and contradicts what the in-app terms already promise.
   A length tier is chosen server-side from the measured character count, and the
   device only learns which App Store product to buy.
-- Eight consumable tiers, by source characters: ≤150k, ≤300k, ≤500k, ≤800k,
-  ≤1.2M, ≤3M, ≤6M (€17.99) and ≤12M (€24.99). The two long tiers exist for
-  web-novel volumes (a tester's shelf ran 0.3–3.1M per volume) and hold a
-  thinner 58% / 39% contribution on purpose: a reader of a serial will not
-  pay €50 for one book. A book above 12M is refused at upload; selling it in
-  ≤3M parts is the path if that ever matters.
+- Six consumable tiers, by source characters, priced so a book costs a
+  reader at most 2990 Ft / €9.99 (manual HUF prices, EUR base in DEU):
+  ≤150k 990 Ft / €2.49, ≤300k 1290 Ft / €2.99, ≤500k 1590 Ft / €3.99,
+  ≤800k 1990 Ft / €4.99, ≤1.2M 2490 Ft / €6.99, ≤3M 2990 Ft / €9.99.
+  Worst case (a book at its tier's cap) keeps a 51% contribution on t6 in
+  Hungary and 76–92% below it. A book above 3M is refused at upload: at
+  2990 Ft a 6M book barely breaks even and a 12M one loses money. The earlier
+  t7 (≤6M) and t8 (≤12M) products exist in App Store Connect but are withdrawn
+  from sale; selling a long book in ≤3M parts is the path if that ever matters.
   The table lives in `cloudflare/src/database.ts` (`BOOK_TIERS`) and is the only
   place a tier is decided.
 - The price shown to the reader always comes from StoreKit's `displayPrice`,
